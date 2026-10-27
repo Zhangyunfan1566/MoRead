@@ -801,17 +801,22 @@ fun ReaderScreen(
                         null
                     }
                 val paneImageAction: (String, String, IntRange) -> Unit =
-                    { _, contextText, range ->
+                    { selectionText, contextText, range ->
                         val chapterIndex = state.currentChapterIndex
                         coroutineScope.launch {
                             val source = viewModel.sourceSelectionForDisplayed(chapterIndex, range)
                                 ?: return@launch
-                            imageStudioEntry = com.mozhi.reader.feature.illustration.StudioEntry(
-                                page = com.mozhi.reader.feature.illustration.StudioPage.GENERATE,
-                                source = source.text,
+                            // 直接出图：用本书已保存的画风 + 生图 API 里配置好的模型/固定正面词/负面词，
+                            // 不再每次都弹「选画风 → 确认」的插图工坊。想调画风时，在出图预览里点「插图工坊」。
+                            selectionMediaViewModel.generateImage(
+                                bookId = bookId,
+                                bookTitle = state.book?.title.orEmpty(),
+                                chapterTitle = chapterTitle,
                                 chapterIndex = chapterIndex,
                                 charOffset = source.start,
-                                anchor = source.textAnchorJson
+                                textAnchorJson = source.textAnchorJson,
+                                selection = selectionText.ifBlank { source.text },
+                                contextText = contextText
                             )
                         }
                     }
@@ -1507,9 +1512,20 @@ fun ReaderScreen(
     }
 
     selectionMediaState.imagePath?.let { path ->
-        com.mozhi.reader.feature.illustration.ImageStudio(bookId,
-            com.mozhi.reader.feature.illustration.StudioEntry(page = com.mozhi.reader.feature.illustration.StudioPage.GENERATE, imagePath = path),
-            onDismiss = selectionMediaViewModel::dismissImage)
+        ReaderGeneratedImageDialog(
+            state = selectionMediaState,
+            palette = palette,
+            onDismiss = selectionMediaViewModel::dismissImage,
+            onReroll = selectionMediaViewModel::rerollImage,
+            // 需要改画风/细调时才进工坊——入口放在这里，而不是每次都拦在前面
+            onOpenStudio = {
+                selectionMediaViewModel.dismissImage()
+                imageStudioEntry = com.mozhi.reader.feature.illustration.StudioEntry(
+                    page = com.mozhi.reader.feature.illustration.StudioPage.GENERATE,
+                    imagePath = path
+                )
+            }
+        )
     }
 
     ReaderTextEditDialog(

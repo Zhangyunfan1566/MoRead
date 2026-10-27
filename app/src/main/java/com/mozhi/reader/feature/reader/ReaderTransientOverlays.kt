@@ -144,7 +144,9 @@ internal fun ReaderGeneratedImageDialog(
     state: SelectionMediaUiState,
     palette: ReaderPalette,
     onDismiss: () -> Unit,
-    onReroll: (String, String) -> Unit
+    onReroll: (String, String) -> Unit,
+    /** 可选：需要改画风/细调时进插图工坊。为空则不显示入口。 */
+    onOpenStudio: (() -> Unit)? = null
 ) {
     val imagePath = state.imagePath ?: return
     var editablePrompt by remember(imagePath) { mutableStateOf(state.imagePrompt.orEmpty()) }
@@ -233,8 +235,13 @@ internal fun ReaderGeneratedImageDialog(
             }
         },
         dismissButton = {
-            if (imageGeneration != null) {
-                TextButton(onClick = onDismiss) { Text("完成") }
+            Row {
+                onOpenStudio?.let { openStudio ->
+                    TextButton(onClick = openStudio) { Text("插图工坊") }
+                }
+                if (imageGeneration != null) {
+                    TextButton(onClick = onDismiss) { Text("完成") }
+                }
             }
         }
     )
