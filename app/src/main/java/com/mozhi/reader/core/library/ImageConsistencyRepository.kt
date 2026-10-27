@@ -184,6 +184,19 @@ class ImageConsistencyRepository @Inject constructor(
         val caps = client.client.capabilities
         val style = styleOverride ?: book.style
 
+        // 硬前提检查：标签型后端（NovelAI）只认英文 danbooru tag，中文正文必须先由**对话模型**转换。
+        // 没配对话模型时这里提前失败并给出可操作的话术——否则错误会埋在小字里，用户看到的是"点下去没反应"。
+        if (caps.tags && !caps.multilingual) {
+            runCatching { clients.forRole(ModelRole.CHAT) }.onFailure { cause ->
+                throw IllegalStateException(
+                    "出图需要一个对话模型：NovelAI 只认英文标签，中文选段要先由它转换成 danbooru tag。" +
+                        "请到「设置 → 伴读与联网 → AI 服务」添加一个对话模型（OpenAI 兼容即可）后重试。" +
+                        (cause.message?.let { "（原因：$it）" } ?: ""),
+                    cause
+                )
+            }
+        }
+
         val planned = runCatching {
             architect.plan(
                 ImageSceneArchitect.Input(
