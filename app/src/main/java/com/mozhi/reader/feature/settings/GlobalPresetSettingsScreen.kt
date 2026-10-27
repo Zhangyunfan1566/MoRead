@@ -53,6 +53,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.ai.prompt.SillyTavernPresetImporter
 import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
+import com.mozhi.reader.core.datastore.PromptRole
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
 import com.mozhi.reader.ui.components.DashedAddRow
 import com.mozhi.reader.ui.components.FrostedSurface
@@ -204,9 +205,17 @@ internal fun TavernImportDialog(
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    "可导入 ${result.presets.size} 条，跳过 ${result.skipped.size} 条。",
+                    "可注入 ${result.presets.size} 条，标记条目 ${result.markers.size} 条（不注入），跳过 ${result.skipped.size} 条。",
                     style = MaterialTheme.typography.bodyMedium
                 )
+                if (result.unsupportedMacros.isNotEmpty()) {
+                    Text(
+                        "含本应用不执行的宏：" + result.unsupportedMacros.joinToString("、") +
+                            "（原样保留，不会替换）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 if (result.splitNames.isNotEmpty()) {
                     Text(
                         "超长条目已自动分段：" + result.splitNames.joinToString("、"),
@@ -216,7 +225,7 @@ internal fun TavernImportDialog(
                 }
                 result.presets.take(12).forEach { preset ->
                     Text(
-                        "· ${preset.name} → ${preset.position.label()}",
+                        "· ${preset.name} → ${preset.placementSummary()}",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -226,6 +235,23 @@ internal fun TavernImportDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                if (result.markers.isNotEmpty()) {
+                    Text("标记条目（保留但不注入）", style = MaterialTheme.typography.titleSmall)
+                    result.markers.take(6).forEach { marker ->
+                        Text(
+                            "· ${marker.name}" + if (marker.identifier.isNotBlank()) "（${marker.identifier}）" else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (result.markers.size > 6) {
+                        Text(
+                            "…还有 ${result.markers.size - 6} 条",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 if (result.skipped.isNotEmpty()) {
                     Text("跳过明细", style = MaterialTheme.typography.titleSmall)
@@ -246,9 +272,9 @@ internal fun TavernImportDialog(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("全部压到「最近用户消息之后」", style = MaterialTheme.typography.bodyMedium)
+                        Text("压平到「最近用户消息之后」", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "更贴近生成点，破限向用法；关掉则按酒馆的 absolute / depth 近似映射。",
+                            "关掉（默认）= 保留酒馆的角色与相对深度；打开 = 忽略两者，全部作为 system 文本压到生成点。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -256,8 +282,8 @@ internal fun TavernImportDialog(
                     Switch(checked = flatten, onCheckedChange = onToggleFlatten)
                 }
                 Text(
-                    "位置是近似映射：酒馆的 absolute 进 system，depth 注入落到最近一条用户消息前后；" +
-                        "本应用没有按对话深度插入的层级。导入后可在列表里逐条开关。",
+                    "已按酒馆语义保留：角色（含 assistant 预填充）与相对深度；绝对位置按角色映射到锚点。" +
+                        "导入后可在列表里逐条开关、改角色/深度。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -292,7 +318,7 @@ internal fun PresetRow(
                 Column(Modifier.weight(1f)) {
                     Text(preset.name, style = MaterialTheme.typography.titleSmall)
                     Text(
-                        preset.position.label() + if (preset.builtIn) " · 内置" else " · 自定义",
+                        preset.placementSummary() + if (preset.builtIn) " · 内置" else " · 自定义",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -329,7 +355,11 @@ internal fun PresetEditorDialog(
     var name by remember(initial.id) { mutableStateOf(initial.name) }
     var prompt by remember(initial.id) { mutableStateOf(initial.prompt) }
     var position by remember(initial.id) { mutableStateOf(initial.position) }
+    var role by remember(initial.id) { mutableStateOf(initial.role) }
+    var depthText by remember(initial.id) { mutableStateOf(initial.depth.toString()) }
+    var marker by remember(initial.id) { mutableStateOf(initial.marker) }
     var expanded by remember { mutableStateOf(false) }
+    var roleExpanded by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial.id.isBlank()) "添加$kindLabel" else "编辑$kindLabel") },
@@ -342,12 +372,42 @@ internal fun PresetEditorDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                // 角色：酒馆语义。assistant = 预填充（以助手身份插入，破限最强的手段）
+                ExposedDropdownMenuBox(expanded = roleExpanded, onExpandedChange = { roleExpanded = it }) {
+                    OutlinedTextField(
+                        value = role.label(),
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("角色") },
+                        supportingText = {
+                            if (role == PromptRole.ASSISTANT) Text("预填充：以助手身份插入，模型会当作自己已经开始说")
+                        },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(roleExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                    )
+                    ExposedDropdownMenu(expanded = roleExpanded, onDismissRequest = { roleExpanded = false }) {
+                        PromptRole.entries.forEach { candidate ->
+                            DropdownMenuItem(
+                                text = { Text(candidate.label()) },
+                                onClick = { role = candidate; roleExpanded = false }
+                            )
+                        }
+                    }
+                }
                 ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
                     OutlinedTextField(
                         value = position.label(),
                         onValueChange = {},
                         readOnly = true,
+                        enabled = depthText.toIntOrNull()?.let { it < 0 } != false,
                         label = { Text("注入位置") },
+                        supportingText = {
+                            if (depthText.toIntOrNull()?.let { it >= 0 } == true) {
+                                Text("已用相对深度，此锚点被忽略")
+                            }
+                        },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -363,6 +423,28 @@ internal fun PresetEditorDialog(
                     }
                 }
                 OutlinedTextField(
+                    value = depthText,
+                    onValueChange = { raw ->
+                        // 允许前导负号；清空即等于 -1（用锚点）
+                        depthText = raw.filterIndexed { index, c -> c.isDigit() || (c == '-' && index == 0) }.take(4)
+                    },
+                    label = { Text("相对深度") },
+                    singleLine = true,
+                    supportingText = { Text("酒馆的 injection_depth：-1 = 用上面的锚点；0 = 最后一条之后（预填充位）；N = 从末尾往上数 N 条") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("标记条目（不注入）", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "酒馆的 marker（如 charDescription / chatHistory）：保留在列表里，但不参与注入",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = marker, onCheckedChange = { marker = it })
+                }
+                OutlinedTextField(
                     value = prompt,
                     onValueChange = { prompt = it.take(12_000) },
                     label = { Text("提示词") },
@@ -375,7 +457,18 @@ internal fun PresetEditorDialog(
         confirmButton = {
             TextButton(
                 enabled = name.isNotBlank() && prompt.isNotBlank(),
-                onClick = { onSave(initial.copy(name = name, prompt = prompt, position = position)) }
+                onClick = {
+                    onSave(
+                        initial.copy(
+                            name = name,
+                            prompt = prompt,
+                            position = position,
+                            role = role,
+                            depth = depthText.toIntOrNull() ?: -1,
+                            marker = marker
+                        )
+                    )
+                }
             ) { Text("保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
@@ -387,4 +480,19 @@ internal fun GlobalPromptInjectionPosition.label(): String = when (this) {
     GlobalPromptInjectionPosition.AFTER_SYSTEM -> "主系统提示词之后"
     GlobalPromptInjectionPosition.BEFORE_LAST_USER -> "最近用户消息之前"
     GlobalPromptInjectionPosition.AFTER_LAST_USER -> "最近用户消息之后"
+    GlobalPromptInjectionPosition.BEFORE_HISTORY -> "聊天历史之前"
+    GlobalPromptInjectionPosition.AFTER_HISTORY -> "聊天历史之后"
+}
+
+internal fun PromptRole.label(): String = when (this) {
+    PromptRole.SYSTEM -> "系统"
+    PromptRole.USER -> "用户"
+    PromptRole.ASSISTANT -> "助手（预填充）"
+}
+
+/** 行内摘要：角色 + 落点（深度优先）。 */
+internal fun GlobalPromptPreset.placementSummary(): String {
+    if (marker) return "标记条目 · 不注入"
+    val place = if (depth >= 0) "深度 $depth（从末尾往上数）" else position.label()
+    return role.label() + " · " + place
 }

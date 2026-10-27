@@ -15,16 +15,29 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /**
- * 全局提示词的注入位置。前两项进入 system，后两项只改写本次请求里最新一条 user，
- * 不会污染 Room 中保存的原消息。设计语义参考 SillyTavern Prompt Manager。
+ * 全局提示词的**绝对锚点**。前两项进入 system，中间两项只改写本次请求里最新一条 user，
+ * 后两项是酒馆语义的聊天历史锚点。设计语义参考 SillyTavern Prompt Manager。
+ *
+ * 旧数据里只可能出现前四个值，新增两个不影响反序列化（`ignoreUnknownKeys` 已开）。
  */
 @Serializable
 enum class GlobalPromptInjectionPosition {
     BEFORE_SYSTEM,
     AFTER_SYSTEM,
     BEFORE_LAST_USER,
-    AFTER_LAST_USER
+    AFTER_LAST_USER,
+    /** 酒馆语义：聊天历史之前（system 块之后、第一条历史消息之前）。 */
+    BEFORE_HISTORY,
+    /** 酒馆语义：聊天历史之后（追加到末尾）。 */
+    AFTER_HISTORY
 }
+
+/**
+ * 注入消息的角色。与酒馆一致：条目可以以 system / user / **assistant** 身份插入，
+ * 其中 assistant 等价于酒馆的「预填充」（prefill）——破限最强的手段。
+ */
+@Serializable
+enum class PromptRole { SYSTEM, USER, ASSISTANT }
 
 @Serializable
 data class GlobalPromptPreset(
@@ -32,8 +45,22 @@ data class GlobalPromptPreset(
     val name: String,
     val prompt: String,
     val enabled: Boolean = false,
+    /** 绝对锚点；[depth] >= 0 时忽略此项。 */
     val position: GlobalPromptInjectionPosition = GlobalPromptInjectionPosition.AFTER_SYSTEM,
-    val builtIn: Boolean = false
+    val builtIn: Boolean = false,
+    /** 注入角色；[PromptRole.ASSISTANT] 等价于酒馆的预填充条目。 */
+    val role: PromptRole = PromptRole.SYSTEM,
+    /**
+     * 相对深度：**-1 = 用 [position] 锚点**；`0..N` = 从对话末尾往上数 N 条消息处插入
+     * （`0` 表示最后一条之后，即预填充位）。对应酒馆的 `injection_depth`。
+     */
+    val depth: Int = -1,
+    /** 酒馆预设里的 identifier（main / jailbreak / nsfw / assistant_prefill …），仅作识别与记录。 */
+    val identifier: String = "",
+    /** 同锚点 / 同深度内的先后顺序，对应酒馆 `prompt_order`。 */
+    val order: Int = 0,
+    /** 酒馆的 marker 条目：保留在列表里可见可改，但**不注入**。 */
+    val marker: Boolean = false
 )
 
 @Singleton

@@ -59,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.media.ImageApiProvider
 import com.mozhi.reader.core.media.NOVELAI_SAMPLERS
+import com.mozhi.reader.core.media.NOVELAI_MODELS
 import com.mozhi.reader.core.media.sizeOptions
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import java.util.Locale
@@ -82,6 +83,7 @@ fun ImageGenSettingsScreen(
         trim = true, onCommit = viewModel::setBaseUrl)
     val modelDraft = rememberCommittedTextFieldState(drafts, "model", settings.model,
         trim = true, onCommit = viewModel::setModel)
+    var modelMenuExpanded by remember { mutableStateOf(false) }
     val sizeDraft = rememberCommittedTextFieldState(drafts, "size", settings.size,
         trim = true, onCommit = viewModel::setSize)
     val positivePromptDraft = rememberCommittedTextFieldState(drafts, "positivePrompt", settings.positivePrompt,
@@ -226,14 +228,37 @@ fun ImageGenSettingsScreen(
                         Text(
                             when (settings.provider) {
                                 ImageApiProvider.NOVELAI ->
-                                    "如 nai-diffusion-4-5-full / nai-diffusion-3"
+                                    "可从右侧下拉选；也可手填（如 nai-diffusion-4-5-full）"
                                 else -> "如 gpt-image-1；中转命名以其文档为准"
                             }
                         )
                     },
                     singleLine = true,
+                    trailingIcon = if (settings.provider == ImageApiProvider.NOVELAI) {
+                        {
+                            IconButton(onClick = { modelMenuExpanded = true }) {
+                                Icon(Icons.Outlined.ExpandMore, contentDescription = "常用模型")
+                            }
+                        }
+                    } else null,
                     modifier = Modifier.fillMaxWidth().committedDraft(modelDraft)
                 )
+                if (settings.provider == ImageApiProvider.NOVELAI) {
+                    DropdownMenu(
+                        expanded = modelMenuExpanded,
+                        onDismissRequest = { modelMenuExpanded = false }
+                    ) {
+                        NOVELAI_MODELS.forEach { id ->
+                            DropdownMenuItem(
+                                text = { Text(id) },
+                                onClick = {
+                                    modelMenuExpanded = false
+                                    afterDrafts { drafts.acceptExternalChanges(); viewModel.setModel(id) }
+                                }
+                            )
+                        }
+                    }
+                }
 
                 var sizeMenuExpanded by remember { mutableStateOf(false) }
                 Box {

@@ -5,39 +5,277 @@ import com.mozhi.reader.ai.client.ChatPart
 import com.mozhi.reader.ai.client.ChatRole
 import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
+import com.mozhi.reader.core.datastore.PromptRole
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/** 酒馆语义的注入：角色（含 assistant 预填充）、相对深度、锚点、顺序、marker 与宏。 */
 class GlobalPromptInjectorTest {
-    @Test
-    fun `injects system presets around existing system`() {
-        val result = GlobalPromptInjector.inject(
-            listOf(ChatMessage(ChatRole.SYSTEM, "base"), ChatMessage(ChatRole.USER, "hello")),
-            listOf(preset("before", GlobalPromptInjectionPosition.BEFORE_SYSTEM), preset("after", GlobalPromptInjectionPosition.AFTER_SYSTEM))
-        )
 
-        assertTrue(result.first().content.indexOf("before") < result.first().content.indexOf("base"))
-        assertTrue(result.first().content.indexOf("after") > result.first().content.indexOf("base"))
+    private fun preset(
+        id: String = "p",
+        name: String = "P",
+        prompt: String = "BLOCK",
+        enabled: Boolean = true,
+        position: GlobalPromptInjectionPosition = GlobalPromptInjectionPosition.AFTER_SYSTEM,
+        role: PromptRole = PromptRole.SYSTEM,
+        depth: Int = -1,
+        order: Int = 0,
+        marker: Boolean = false
+    ) = GlobalPromptPreset(
+        id = id, name = name, prompt = prompt, enabled = enabled,
+        position = position, role = role, depth = depth, order = order, marker = marker
+    )
+
+    /** 典型对话：system + U1 + A1 + U2（U2 是最后一条 user）。 */
+    private fun conversation(): List<ChatMessage> = listOf(
+        ChatMessage(ChatRole.SYSTEM, "SYS"),
+        ChatMessage(ChatRole.USER, "U1"),
+        ChatMessage(ChatRole.ASSISTANT, "A1"),
+        ChatMessage(ChatRole.USER, "U2")
+    )
+
+    private fun roles(messages: List<ChatMessage>) = messages.map { it.role }
+    private fun contents(messages: List<ChatMessage>) = messages.map { it.content }
+
+    // ---------- ① 绝对锚点 + SYSTEM：旧行为（合并） ----------
+
+    @Test
+    fun `system 锚点合并进主 system 消息且保持前后顺序`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(
+                preset(id = "a", prompt = "前", position = GlobalPromptInjectionPosition.BEFORE_SYSTEM),
+                preset(id = "b", prompt = "后", position = GlobalPromptInjectionPosition.AFTER_SYSTEM)
+            )
+        )
+        assertEquals(4, out.size)
+        val system = out.first().content
+        assertTrue(system.startsWith("前"))
+        assertTrue(system.contains("SYS"))
+        assertTrue(system.endsWith("后"))
+        assertEquals(4, out.size)
     }
 
     @Test
-    fun `injects latest multimodal user without changing older user`() {
+    fun `没有 system 消息时新建一条`() {
+        val out = GlobalPromptInjector.inject(
+            listOf(ChatMessage(ChatRole.USER, "U1")),
+            listOf(preset(prompt = "X", position = GlobalPromptInjectionPosition.AFTER_SYSTEM))
+        )
+        assertEquals(ChatRole.SYSTEM, out.first().role)
+        assertTrue(out.first().content.contains("X"))
+        assertEquals(2, out.size)
+    }
+
+    @Test
+    fun `旧的最近用户消息锚点仍是拼接进那条 user（保持兼容）`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(
+                preset(id = "a", prompt = "前", position = GlobalPromptInjectionPosition.BEFORE_LAST_USER),
+                preset(id = "b", prompt = "后", position = GlobalPromptInjectionPosition.AFTER_LAST_USER)
+            )
+        )
+        assertEquals(4, out.size)
+        val lastUser = out.last()
+        assertEquals(ChatRole.USER, lastUser.role)
+        assertTrue(lastUser.content.startsWith("前"))
+        assertTrue(lastUser.content.endsWith("后"))
+        assertTrue(lastUser.content.contains("U2"))
+    }
+
+    @Test
+    fun `多模态的最后一条 user 被注入时保留图片并追加文本片段`() {
         val history = listOf(
             ChatMessage(ChatRole.USER, "old"),
             ChatMessage(ChatRole.ASSISTANT, "answer"),
             ChatMessage(ChatRole.USER, "photo", parts = listOf(ChatPart.Image("data", "image/jpeg")))
         )
-        val result = GlobalPromptInjector.inject(
+        val out = GlobalPromptInjector.inject(
             history,
-            listOf(preset("rule", GlobalPromptInjectionPosition.AFTER_LAST_USER))
+            listOf(preset(prompt = "rule", position = GlobalPromptInjectionPosition.AFTER_LAST_USER))
         )
-
-        assertEquals("old", result.first().content)
-        assertTrue(result.last().content.endsWith("rule"))
-        assertTrue(result.last().parts.last() is ChatPart.Text)
+        assertEquals("old", out.first().content)
+        assertTrue(out.last().content.endsWith("rule"))
+        assertTrue(out.last().parts.last() is ChatPart.Text)
+        assertTrue(out.last().parts.any { it is ChatPart.Image })
     }
 
-    private fun preset(prompt: String, position: GlobalPromptInjectionPosition) =
-        GlobalPromptPreset("$prompt-$position", prompt, prompt, enabled = true, position = position)
+    // ---------- ② 角色：assistant = 预填充 ----------
+
+    @Test
+    fun `assistant 深度 0 以助手身份插在最后一条之后（预填充位）`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(preset(prompt = "PREFILL", role = PromptRole.ASSISTANT, depth = 0))
+        )
+        assertEquals(5, out.size)
+        assertEquals(ChatRole.ASSISTANT, out.last().role)
+        assertTrue(out.last().content.contains("PREFILL"))
+    }
+
+    @Test
+    fun `user 角色以独立用户消息插入而不是改写原文`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(preset(prompt = "USERBLOCK", role = PromptRole.USER, depth = 0))
+        )
+        assertEquals(ChatRole.USER, out.last().role)
+        assertTrue(out.last().content.contains("USERBLOCK"))
+        // 原来的最后一条 user 未被改写
+        assertEquals("U2", out[3].content)
+    }
+
+    @Test
+    fun `绝对锚点配非 system 角色成为独立消息`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(
+                preset(id = "a", prompt = "SYS前用户", role = PromptRole.USER,
+                    position = GlobalPromptInjectionPosition.BEFORE_SYSTEM),
+                preset(id = "b", prompt = "系统后助手", role = PromptRole.ASSISTANT,
+                    position = GlobalPromptInjectionPosition.AFTER_SYSTEM)
+            )
+        )
+        assertEquals(ChatRole.USER, out[0].role)
+        assertTrue(out[0].content.contains("SYS前用户"))
+        assertEquals(ChatRole.SYSTEM, out[1].role)
+        assertEquals(ChatRole.ASSISTANT, out[2].role)
+        assertTrue(out[2].content.contains("系统后助手"))
+    }
+
+    // ---------- ③ 相对深度 ----------
+
+    @Test
+    fun `深度 1 插在最后一条消息之前`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(preset(prompt = "D1", depth = 1, role = PromptRole.SYSTEM))
+        )
+        assertEquals(5, out.size)
+        assertTrue(out[3].content.contains("D1"))
+        assertEquals("U2", out[4].content)
+    }
+
+    @Test
+    fun `深度大于消息数时夹到开头`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(preset(prompt = "D99", depth = 99, role = PromptRole.SYSTEM))
+        )
+        assertEquals(5, out.size)
+        assertTrue(out.first().content.contains("D99"))
+    }
+
+    @Test
+    fun `同深度多条按 order 保持先后`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(
+                preset(id = "b", name = "B", prompt = "SECOND", depth = 0, order = 2),
+                preset(id = "a", name = "A", prompt = "FIRST", depth = 0, order = 1)
+            )
+        )
+        assertEquals(6, out.size)
+        assertTrue(out[4].content.contains("FIRST"))
+        assertTrue(out[5].content.contains("SECOND"))
+    }
+
+    // ---------- ④ 历史锚点 ----------
+
+    @Test
+    fun `聊天历史前后两个锚点`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(
+                preset(id = "a", prompt = "史前", position = GlobalPromptInjectionPosition.BEFORE_HISTORY),
+                preset(id = "b", prompt = "史后", position = GlobalPromptInjectionPosition.AFTER_HISTORY)
+            )
+        )
+        assertEquals(6, out.size)
+        assertTrue(out[1].content.contains("史前"))
+        assertEquals(ChatRole.SYSTEM, out[0].role)
+        assertTrue(out.last().content.contains("史后"))
+    }
+
+    // ---------- ⑤ marker / 禁用 ----------
+
+    @Test
+    fun `marker 与禁用条目不注入`() {
+        val base = conversation()
+        assertEquals(base, GlobalPromptInjector.inject(base, listOf(preset(marker = true))))
+        assertEquals(base, GlobalPromptInjector.inject(base, listOf(preset(enabled = false))))
+        assertEquals(base, GlobalPromptInjector.inject(base, listOf(preset(prompt = "   "))))
+        assertEquals(base, GlobalPromptInjector.inject(base, emptyList()))
+    }
+
+    @Test
+    fun `不污染传入的消息列表`() {
+        val base = conversation()
+        val snapshot = base.map { it.role to it.content }
+        GlobalPromptInjector.inject(base, listOf(preset(depth = 0, role = PromptRole.ASSISTANT)))
+        assertEquals(snapshot, base.map { it.role to it.content })
+    }
+
+    // ---------- ⑥ 宏 ----------
+
+    @Test
+    fun `基础宏被替换而高级宏原样保留`() {
+        val text = "a {{char}} b {{user}} c {{persona}} d {{// 注释}} e {{getvar::x}}"
+        val applied = GlobalPromptInjector.applyMacros(text, MacroContext("小雪", "我", "面具"))
+        assertTrue(applied.contains("a 小雪 b 我 c 面具"))
+        assertTrue(applied.contains("{{getvar::x}}"))
+        assertTrue(!applied.contains("注释"))
+    }
+
+    @Test
+    fun `没有宏上下文时不替换`() {
+        val applied = GlobalPromptInjector.applyMacros("x {{char}} y", null)
+        assertEquals("x {{char}} y", applied)
+    }
+
+    @Test
+    fun `未支持宏会被列出来（含参数与条件写法）`() {
+        val macros = GlobalPromptInjector.unsupportedMacros(
+            "{{getvar::hp}} {{roll 1d20}} {{#if flag}} {{char}} {{user}} {{// c}}"
+        )
+        assertEquals(listOf("getvar", "roll", "if"), macros)
+    }
+
+    @Test
+    fun `注入时宏会被替换进最终文本`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(preset(prompt = "称呼 {{char}}", role = PromptRole.ASSISTANT, depth = 0)),
+            macros = MacroContext(characterName = "小雪")
+        )
+        assertTrue(out.last().content.contains("称呼 小雪"))
+    }
+
+    // ---------- ⑦ 组合：酒馆式布局 ----------
+
+    @Test
+    fun `酒馆式布局：主提示词后契约 + 深度0强化 + 预填充`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(
+                preset(id = "main", prompt = "契约", position = GlobalPromptInjectionPosition.AFTER_SYSTEM, order = 0),
+                preset(id = "jb", prompt = "强化", depth = 0, role = PromptRole.SYSTEM, order = 1),
+                preset(id = "prefill", prompt = "思考已结束", depth = 0, role = PromptRole.ASSISTANT, order = 2)
+            )
+        )
+        assertEquals(6, out.size)
+        assertTrue(out.first().content.contains("契约"))
+        assertEquals(ChatRole.SYSTEM, out[4].role)
+        assertTrue(out[4].content.contains("强化"))
+        assertEquals(ChatRole.ASSISTANT, out[5].role)
+        assertTrue(out[5].content.contains("思考已结束"))
+        assertEquals(
+            listOf(ChatRole.SYSTEM, ChatRole.USER, ChatRole.ASSISTANT, ChatRole.USER, ChatRole.SYSTEM, ChatRole.ASSISTANT),
+            roles(out)
+        )
+        assertTrue(contents(out)[3] == "U2")
+    }
 }

@@ -42,9 +42,27 @@ val NOVELAI_SAMPLERS = listOf(
     "k_euler_ancestral",
     "k_euler",
     "k_dpmpp_2m",
+    // DPM++ 2M SDE：细节与质感通常比 2M 更好，采样偏慢，官方同样支持。
+    "k_dpmpp_2m_sde",
     "k_dpmpp_2s_ancestral",
     "k_dpmpp_sde",
     "ddim_v3"
+)
+
+/**
+ * NovelAI 生图模型（仅列**生成**模型；本应用的独立生图 API 是文生图，
+ * 用不到 inpainting / 局部重绘变体）。选择后写入 [ImageApiSettings.model]。
+ */
+val NOVELAI_MODELS: List<String> = listOf(
+    "nai-diffusion-5-full",
+    "nai-diffusion-5-curated",
+    "nai-diffusion-5-full-medium",
+    "nai-diffusion-4-5-full",
+    "nai-diffusion-4-5-curated",
+    "nai-diffusion-4-full",
+    "nai-diffusion-4-curated-preview",
+    "nai-diffusion-3",
+    "nai-diffusion-furry-3"
 )
 
 /** 独立生图 API 配置；填齐后优先于「模型分配」的生图模型。 */

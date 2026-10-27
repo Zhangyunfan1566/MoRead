@@ -3,9 +3,7 @@ package com.mozhi.reader.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.prompt.SillyTavernPresetImporter
-import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
-import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
@@ -41,7 +39,7 @@ class GlobalPresetSettingsViewModel @Inject constructor(
     /** 待导入的原始 JSON，切换"压到生成点"时要重新解析。 */
     private var pendingImportText: String? = null
 
-    /** 是否把导入的条目全部改放到"最近用户消息之后"（更贴近生成点，破限向用法）。 */
+    /** 是否把导入的条目全部压平到"最近用户消息之后"（忽略酒馆的 role 与 depth）。 */
     private val _importFlatten = MutableStateFlow(false)
     val importFlatten = _importFlatten.asStateFlow()
 
@@ -60,10 +58,10 @@ class GlobalPresetSettingsViewModel @Inject constructor(
 
     private fun rebuildImportPreview() {
         val text = pendingImportText ?: return
-        val override = if (_importFlatten.value) GlobalPromptInjectionPosition.AFTER_LAST_USER else null
         viewModelScope.launch {
-            runCatching { SillyTavernPresetImporter.import(text, overridePosition = override) }
-                .onSuccess { _importPreview.value = it }
+            runCatching {
+                SillyTavernPresetImporter.import(text, flattenToLastUser = _importFlatten.value)
+            }.onSuccess { _importPreview.value = it }
                 .onFailure { error ->
                     eventChannel.send(GlobalPresetEvent.Message(error.message ?: "导入失败"))
                 }
@@ -81,10 +79,13 @@ class GlobalPresetSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching {
                 result.presets.forEach { store.upsert(it.copy(enabled = enabled)) }
+                // marker 条目一并收进列表：可见、可手动改成可注入，但本身不参与注入。
+                result.markers.forEach { store.upsert(it.copy(enabled = false, marker = true)) }
             }.onSuccess {
                 _importPreview.value = null
+                val markerTail = if (result.markers.isEmpty()) "" else "，另存 ${result.markers.size} 条标记条目（不注入）"
                 val tail = if (result.skipped.isEmpty()) "" else "，跳过 ${result.skipped.size} 条"
-                eventChannel.send(GlobalPresetEvent.Message("已导入 ${result.presets.size} 条预设$tail"))
+                eventChannel.send(GlobalPresetEvent.Message("已导入 ${result.presets.size} 条预设$markerTail$tail"))
             }.onFailure { error ->
                 eventChannel.send(GlobalPresetEvent.Message(error.message ?: "写入失败"))
             }
