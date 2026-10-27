@@ -41,6 +41,32 @@ git merge upstream/main     # 冲突多在版本号/日志文件
 - `feature/settings/GlobalPresetSettingsScreen.kt`：列表底部新增「导入酒馆预设（JSON）」入口
   （`OpenDocument` + 8MB 上限）、导入预览确认框（导入/跳过明细 + 「全部压到最近用户消息之后」开关）
 
+## 分支 `feature/image-scene-architect`：出图链路重写
+
+原出图链路是**两次请求 + 自然语言拼接**：先让模型挑人物（且先试 `CHEAP` 角色，吃不到全局预设/破限串），
+再由代码拼一段 `Style: … / Character X: … / Scene: … / Avoid: …` 塞给 NAI ——
+NAI 收到的是非标准自然语言串而不是它的原生结构，且完全没有「角色档案维护」协议。
+
+重写为**一次请求产出完整配方**（参照 SillyTavern 扩展「柏宝绘」ST-BaiBai-Image 的做法）：
+
+- **新增** `ai/media/ImageSceneArchitect.kt`
+  - 消息顺序固定：**破限 → 后端规范 → 思考清单 → 任务协议 → 正文**；破限/规范/思考清单均可在设置里覆盖
+  - 内置破限含**成人内容条款**（照实写画面、不因露骨删减；未成年人边界；只输出协议 JSON）
+  - 内置 NAI 规范讲 **Base 块与角色块的分工**（Base 只放人数/景别/场景/光线/共享关系；
+    每角色外貌·服装·动作·表情·视线进 `characters[]`），含**显式场景条款**
+    （逐个写出可见身体部位与接触关系，禁止只写 nsfw 糊过去）与多人绑定规则
+  - 输出协议固定 JSON：`{thinking, images[{tag, nl, characters[], negative, size}], changes[]}`
+  - 解析器：剥 `<thinking>` → 取第一个平衡 JSON（容忍围栏/前后说明/字符串内花括号）→ 校验清洗
+    （NAI 后端丢弃含中文 tag、剔除通用质量负面词、按 `maxImages` 截断、`minImages` 不足报错）
+- **外貌库闭环**：`changes` 写回 `LookSpec`（建档 `field:"new"` 解析 `hair=…; eyes=…`；
+  永久变化推进 `sinceChapter`，变化之前的画面仍取旧档案）；纯逻辑抽成 `SceneArchitectLibrary` 便于单测
+- **NAI 原生结构**：`ImageRecipe` 增加 `baseTag` / `characterTags` / `negativeExtra`；
+  `RecipeAssembler` 优先用规划器的 Base 块与角色块，不再拼自然语言
+- **NAI 参数可配**：`ucPreset`（Heavy/Light/None/Human Focus）与 `qualityToggle` 从硬编码改为设置项
+- **选区出图不再自拼中文提示词**：`ReaderSelectionMediaViewModel` 把「选段 + 附近语境 + 章节信息」原样交给规划器
+- **兜底**：规划器不可用（没有对话模型 / 返回无法解析）时退回旧的镜头规划路径，仍能出图
+- **测试**：`ImageSceneArchitectTest`（解析、清洗、档案合并、协议内容、消息顺序、设置覆盖）
+
 ## 实测结论（省得重踩）
 
 - **本线尚未编译验证**：本机 2026-10-10 起已按需清理 Android/Flutter 工具链

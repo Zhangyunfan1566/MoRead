@@ -175,6 +175,8 @@ class AiClientFactory @Inject constructor(
                         sampler = config.sampler,
                         steps = config.steps,
                         scale = config.scale,
+                        ucPreset = config.ucPreset,
+                        qualityToggle = config.qualityToggle,
                         httpClient = httpClient
                     ),
                     label = "NovelAI ${config.model}"

@@ -42,6 +42,7 @@ class ImageConsistencyRepository @Inject constructor(
     private val characters: BookCharactersRepository,
     private val settings: ReaderSettingsRepository,
     private val clients: AiClientFactory,
+    private val architect: ImageSceneArchitect,
     @ApplicationContext private val context: Context
 ) {
     val dao get() = database.imageConsistencyDao()
@@ -169,15 +170,79 @@ class ImageConsistencyRepository @Inject constructor(
             source = if (keepManual) "manual" else "text")
     }
 
-    /** Planner never sees saved looks or future character attributes. Only a shot is editable by the LLM. */
+    /**
+     * 规划一次画面。
+     *
+     * **一次请求**就拿到「选画面 + Base tag + 每角色块 + 负面词 + 画幅 + 角色档案变更」，
+     * 取代原先「先让模型挑人物、再由代码拼 Style/Character/Scene 自然语言」的两段式做法。
+     * 规划器不可用（没有对话模型 / 返回无法解析）时退回旧的镜头规划路径，保证仍能出图。
+     */
     suspend fun plan(bookId: Long, chapterIndex: Int?, source: String, castKeys: List<String>? = null,
         useReferences: Boolean = false, size: String? = null, styleOverride: StyleSpec? = null): ImageRecipe {
         val book = bookContext(bookId, chapterIndex)
         val client = clients.imageGeneration()
+        val caps = client.client.capabilities
+        val style = styleOverride ?: book.style
+
+        val planned = runCatching {
+            architect.plan(
+                ImageSceneArchitect.Input(
+                    bookTitle = book.book.title,
+                    chapterTitle = runCatching { library.getChapter(bookId, book.chapterIndex)?.title }.getOrNull().orEmpty(),
+                    chapterIndex = book.chapterIndex,
+                    targetText = source.take(12_000),
+                    contextText = "",
+                    people = book.people,
+                    looks = book.looks.filter { it.sinceChapter <= book.chapterIndex },
+                    style = style,
+                    capabilities = caps,
+                    maxImages = 1,
+                    minImages = 1,
+                    lockedOrientation = null,
+                    naturalLanguage = !caps.tags,
+                    negativeEnabled = caps.tags
+                )
+            )
+        }.getOrNull()
+
+        val image = planned?.images?.firstOrNull()
+        if (image != null) {
+            // 档案变更（建档 / 永久变化）落库；失败不影响本次出图。
+            planned.changes.forEach { change ->
+                runCatching { applyLibraryChange(bookId, book, change, book.chapterIndex) }
+            }
+            val limit = caps.maxCharacters.coerceAtLeast(1)
+            val cast = image.characters
+                .map { character -> lookFor(book, character.name, book.chapterIndex) }
+                .take(limit)
+            val characterTags = image.characters.map { it.tag }.take(limit)
+            val refs = planReferences(caps, cast, style, useReferences)
+            return ImageRecipe(
+                style = style,
+                cast = cast,
+                shot = ShotSpec(cast = cast.map { it.characterKey }, action = image.tag),
+                references = refs.references,
+                seed = if (caps.seed) style.seed ?: randomImageSeed() else null,
+                size = size ?: client.client.defaultImageSize,
+                backend = client.label,
+                baseTag = image.tag,
+                characterTags = if (cast.isEmpty()) emptyList() else characterTags,
+                negativeExtra = image.negative
+            )
+        }
+        return legacyPlan(bookId, book, source, castKeys, useReferences, size, styleOverride, caps)
+    }
+
+    /** 规划器不可用时的兜底：只让模型挑人物与镜头，外貌仍由外貌库提供（旧行为）。 */
+    private suspend fun legacyPlan(bookId: Long, book: ImageBookContext, source: String, castKeys: List<String>?,
+        useReferences: Boolean, size: String?, styleOverride: StyleSpec?, caps: ImageCapabilities): ImageRecipe {
+        val client = clients.imageGeneration()
         val allowed = book.people.map { it.identity }.toSet()
-        val fallbackCast = book.people.filter { person -> (listOf(person.name, person.identity) + person.aliases).any { it in source } }.map { it.identity }
+        val fallbackCast = book.people.filter { person ->
+            (listOf(person.name, person.identity) + person.aliases).any { it in source }
+        }.map { it.identity }
         var shot = ShotSpec(cast = fallbackCast, action = source.take(8_000))
-        for (role in listOf(ModelRole.CHEAP, ModelRole.CHAT)) {
+        for (role in listOf(ModelRole.CHAT, ModelRole.CHEAP)) {
             try {
                 val chat = clients.forRole(role)
                 val names = book.people.map { mapOf("id" to it.identity, "name" to it.name, "aliases" to it.aliases.joinToString(", ")) }
@@ -195,19 +260,57 @@ class ImageConsistencyRepository @Inject constructor(
         val cast = selected.mapNotNull { key ->
             val existing = visibleLook(book.looks, key, book.chapterIndex)
             var look = existing ?: book.people.firstOrNull { it.identity == key }?.let { initialLook(it, book.chapterIndex) }
-            if (look != null && client.client.capabilities.tags && !client.client.capabilities.multilingual) look = translateLook(look)
+            if (look != null && caps.tags && !caps.multilingual) look = translateLook(look)
             if (look != null && look != existing && (look.natural.isNotBlank() || look.tags.isNotBlank())) saveLook(bookId, look)
             look
         }
         var style = styleOverride ?: book.style
-        if (client.client.capabilities.tags && !client.client.capabilities.multilingual && style.tags.isBlank() && style.natural.isNotBlank()) {
+        if (caps.tags && !caps.multilingual && style.tags.isBlank() && style.natural.isNotBlank()) {
             style = style.copy(tags = translateLook(LookSpec("style", "style", "", natural = style.natural), "visual style").tags)
             if (styleOverride == null) saveStyle(bookId, style)
         }
-        val refs = planReferences(client.client.capabilities, cast, style, useReferences)
+        val refs = planReferences(caps, cast, style, useReferences)
         return ImageRecipe(style = style, cast = cast, shot = shot.copy(cast = selected), references = refs.references,
-            seed = if (client.client.capabilities.seed) style.seed ?: randomImageSeed() else null,
+            seed = if (caps.seed) style.seed ?: randomImageSeed() else null,
             size = size ?: client.client.defaultImageSize, backend = client.label)
+    }
+
+    /** 按规划器给出的角色名（故事原名 / identity）取外貌卡；没有就按人物档案起一张。 */
+    private fun lookFor(book: ImageBookContext, name: String, chapterIndex: Int): LookSpec {
+        val person = book.people.firstOrNull { it.name == name || it.identity == name || name in it.aliases }
+        val key = person?.identity ?: name
+        return visibleLook(book.looks, key, chapterIndex)
+            ?: person?.let { initialLook(it, chapterIndex) }
+            ?: LookSpec(UUID.randomUUID().toString(), key, name, sinceChapter = chapterIndex, source = "architect")
+    }
+
+    /**
+     * 应用规划器的档案变更：
+     * - `field == "new"`：建档（值为 `hair=long black hair; eyes=blue eyes` 这种分项串）；已有档案不覆盖。
+     * - 其余 field：永久变化，从当前章节起生效（[LookSpec.sinceChapter]），旧章节仍用旧档案。
+     */
+    private suspend fun applyLibraryChange(bookId: Long, book: ImageBookContext, change: ImageSceneArchitect.LookChange, chapterIndex: Int) {
+        val person = book.people.firstOrNull { it.name == change.name || it.identity == change.name || change.name in it.aliases }
+        val key = person?.identity ?: change.name
+        val current = visibleLook(book.looks, key, chapterIndex)
+        if (change.field == "new") {
+            if (current != null) return
+            val fields = change.value.split(';', ',').mapNotNull { part ->
+                val pieces = part.split('=', limit = 2)
+                if (pieces.size == 2 && pieces[1].isNotBlank()) pieces[0].trim() to pieces[1].trim() else null
+            }
+            if (fields.isEmpty()) return
+            val natural = fields.joinToString("; ") { "${it.first}=${it.second}" }
+            val tags = fields.joinToString(", ") { it.second }
+            saveLook(bookId, LookSpec(UUID.randomUUID().toString(), key, change.name, sinceChapter = chapterIndex,
+                natural = natural, tags = tags,
+                attributes = fields.map { LookAttribute(it.first, it.second, chapterIndex, quote = change.reason) },
+                source = "architect"))
+            return
+        }
+        if (current == null) return
+        val updated = architect.applyChanges(current, listOf(change), chapterIndex) ?: return
+        saveLook(bookId, updated)
     }
 
     suspend fun request(recipe: ImageRecipe, client: ImageGenerationClient): ImageRequest {

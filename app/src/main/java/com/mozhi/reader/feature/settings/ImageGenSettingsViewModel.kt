@@ -93,6 +93,11 @@ class ImageGenSettingsViewModel @Inject constructor(
     fun setSampler(value: String) = update("setSampler") { it.copy(sampler = value) }
     fun setSteps(value: Int) = update("setSteps") { it.copy(steps = value.coerceIn(1, 50)) }
     fun setScale(value: Float) = update("setScale") { it.copy(scale = value.coerceIn(0f, 10f)) }
+    fun setUcPreset(value: Int) = update("setUcPreset") { it.copy(ucPreset = value.coerceIn(0, 3)) }
+    fun setQualityToggle(value: Boolean) = update("setQualityToggle") { it.copy(qualityToggle = value) }
+    fun setJailbreakPrompt(value: String) = update("setJailbreakPrompt") { it.copy(jailbreakPrompt = value) }
+    fun setImageSpec(value: String) = update("setImageSpec") { it.copy(imageSpec = value) }
+    fun setImageThinking(value: String) = update("setImageThinking") { it.copy(imageThinking = value) }
 
     fun saveApiKey(raw: String) {
         val key = raw.trim()
