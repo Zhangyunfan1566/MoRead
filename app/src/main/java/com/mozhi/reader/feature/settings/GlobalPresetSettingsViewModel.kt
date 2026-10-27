@@ -2,13 +2,18 @@ package com.mozhi.reader.feature.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mozhi.reader.ai.prompt.SillyTavernPresetImporter
+import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
+import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -28,6 +33,63 @@ class GlobalPresetSettingsViewModel @Inject constructor(
     )
     private val eventChannel = Channel<GlobalPresetEvent>(Channel.BUFFERED)
     val events = eventChannel.receiveAsFlow()
+
+    /** 酒馆预设导入预览；非空时界面弹出确认框。 */
+    private val _importPreview = MutableStateFlow<SillyTavernPresetImporter.Result?>(null)
+    val importPreview = _importPreview.asStateFlow()
+
+    /** 待导入的原始 JSON，切换"压到生成点"时要重新解析。 */
+    private var pendingImportText: String? = null
+
+    /** 是否把导入的条目全部改放到"最近用户消息之后"（更贴近生成点，破限向用法）。 */
+    private val _importFlatten = MutableStateFlow(false)
+    val importFlatten = _importFlatten.asStateFlow()
+
+    /** 解析酒馆预设 JSON 并暂存结果，等用户确认后再写入。 */
+    fun previewTavernImport(text: String) {
+        pendingImportText = text
+        _importFlatten.value = false
+        rebuildImportPreview()
+    }
+
+    fun setImportFlatten(flatten: Boolean) {
+        if (_importFlatten.value == flatten) return
+        _importFlatten.value = flatten
+        rebuildImportPreview()
+    }
+
+    private fun rebuildImportPreview() {
+        val text = pendingImportText ?: return
+        val override = if (_importFlatten.value) GlobalPromptInjectionPosition.AFTER_LAST_USER else null
+        viewModelScope.launch {
+            runCatching { SillyTavernPresetImporter.import(text, overridePosition = override) }
+                .onSuccess { _importPreview.value = it }
+                .onFailure { error ->
+                    eventChannel.send(GlobalPresetEvent.Message(error.message ?: "导入失败"))
+                }
+        }
+    }
+
+    fun dismissTavernImport() {
+        _importPreview.value = null
+        pendingImportText = null
+    }
+
+    /** 确认导入。[enabled] 决定导入后是否立即启用（默认不启用，避免一次导入就改变行为）。 */
+    fun confirmTavernImport(enabled: Boolean) {
+        val result = _importPreview.value ?: return
+        viewModelScope.launch {
+            runCatching {
+                result.presets.forEach { store.upsert(it.copy(enabled = enabled)) }
+            }.onSuccess {
+                _importPreview.value = null
+                val tail = if (result.skipped.isEmpty()) "" else "，跳过 ${result.skipped.size} 条"
+                eventChannel.send(GlobalPresetEvent.Message("已导入 ${result.presets.size} 条预设$tail"))
+            }.onFailure { error ->
+                eventChannel.send(GlobalPresetEvent.Message(error.message ?: "写入失败"))
+            }
+        }
+    }
 
     fun save(preset: GlobalPromptPreset) {
         viewModelScope.launch {
