@@ -333,8 +333,9 @@ class ImageStudioViewModel @Inject constructor(
     }
 
     fun planQueue(first: Int, last: Int) = work {
-        val rows = queueService.prepare(state.value.bookId, first, last)
-        mutable.update { it.copy(queuePreview = rows) }
+        // 逐章编排：个别章失败不再把整批预览丢掉，失败章号直接说给用户听。
+        val result = queueService.prepare(state.value.bookId, first, last)
+        mutable.update { it.copy(queuePreview = result.rows, error = result.summary()?.let(UiText::raw)) }
     }
     fun removeQueuePreview(id: String) { mutable.update { it.copy(queuePreview = it.queuePreview.filterNot { row -> row.id == id }) } }
     fun updateQueueRecipe(id: String, recipe: ImageRecipe) { mutable.update { it.copy(queuePreview = it.queuePreview.map { row ->
