@@ -52,7 +52,6 @@ class BookCoverService @Inject constructor(
     @ApplicationContext private val context: Context,
     private val httpClient: OkHttpClient,
     private val clientFactory: AiClientFactory,
-    private val imagePromptComposer: ImagePromptComposer,
     private val libraryRepository: LibraryRepository,
     private val agentLoop: AgentLoop,
     private val webSearchService: WebSearchService,
@@ -285,7 +284,7 @@ class BookCoverService @Inject constructor(
             ${prompt.trim()}
             构图需适合缩略图，主体清晰，留出安全边距；不要生成文字、水印、边框、出版社标识。
             """.trimIndent()
-        , useReferences = true)
+        , useReferences = true, allowLegacyFallback = true)
         val resolved = clientFactory.imageGeneration()
         onProgress(BookCoverGenerationProgress(0.48f, "正在调用 ${resolved.label} 生成图片"))
         val generated = resolved.client.generateImages(imageConsistency.request(recipe, resolved.client)).firstOrNull()

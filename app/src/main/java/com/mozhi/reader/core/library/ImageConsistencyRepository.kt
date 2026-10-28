@@ -121,7 +121,7 @@ class ImageConsistencyRepository @Inject constructor(
                 val result = model.client.chat(listOf(ChatMessage(ChatRole.SYSTEM,
                     "Translate this fixed $subject description into concise comma-separated English tags. Do not add or omit details. Output tags only."),
                     ChatMessage(ChatRole.USER, look.natural)), model.options.copy(reasoning = null))
-                val tags = ImagePromptComposer.normalizeDanbooruTags(result)
+                val tags = ImageTagNormalizer.normalize(result)
                 require(tags.isNotBlank() && tags.none { it in '\u3400'..'\u9FFF' })
                 return look.copy(tags = tags)
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -175,10 +175,17 @@ class ImageConsistencyRepository @Inject constructor(
      *
      * **一次请求**就拿到「选画面 + Base tag + 每角色块 + 负面词 + 画幅 + 角色档案变更」，
      * 取代原先「先让模型挑人物、再由代码拼 Style/Character/Scene 自然语言」的两段式做法。
-     * 规划器不可用（没有对话模型 / 返回无法解析）时退回旧的镜头规划路径，保证仍能出图。
+     * 规划器不可用时**默认直接失败**并给出可操作提示，不再悄悄降级到旧路径——
+     * 静默降级正是"生图很废物"的来源：用户看到一张不对的图，却不知道为什么。
+     * 只有明确知道自己在做什么的调用方（见 [allowLegacyFallback]）才允许退回旧镜头规划。
+     *
+     * @param allowLegacyFallback 仅供**非剧情画面**的场景使用（目前只有书籍封面：它要的是主视觉，
+     *   不是小说分镜，规划器的"只为正文配图、不得编造"规则对它是错配）。
+     *   选区生图 / 对话生图 / 插图工坊 / 批量插图队列一律用默认值 false。
      */
     suspend fun plan(bookId: Long, chapterIndex: Int?, source: String, castKeys: List<String>? = null,
-        useReferences: Boolean = false, size: String? = null, styleOverride: StyleSpec? = null): ImageRecipe {
+        useReferences: Boolean = false, size: String? = null, styleOverride: StyleSpec? = null,
+        allowLegacyFallback: Boolean = false): ImageRecipe {
         val book = bookContext(bookId, chapterIndex)
         val client = clients.imageGeneration()
         val caps = client.client.capabilities
@@ -187,7 +194,7 @@ class ImageConsistencyRepository @Inject constructor(
         // 硬前提检查：标签型后端（NovelAI）只认英文 danbooru tag，中文正文必须先由**对话模型**转换。
         // 没配对话模型时这里提前失败并给出可操作的话术——否则错误会埋在小字里，用户看到的是"点下去没反应"。
         if (caps.tags && !caps.multilingual) {
-            runCatching { clients.forRole(ModelRole.CHAT) }.onFailure { cause ->
+            runCatching { clients.forRole(ModelRole.IMAGE_PROMPT) }.onFailure { cause ->
                 throw IllegalStateException(
                     "出图需要一个对话模型：NovelAI 只认英文标签，中文选段要先由它转换成 danbooru tag。" +
                         "请到「设置 → 伴读与联网 → AI 服务」添加一个对话模型（OpenAI 兼容即可）后重试。" +
@@ -197,7 +204,7 @@ class ImageConsistencyRepository @Inject constructor(
             }
         }
 
-        val planned = runCatching {
+        val planned = try {
             architect.plan(
                 ImageSceneArchitect.Input(
                     bookTitle = book.book.title,
@@ -216,7 +223,12 @@ class ImageConsistencyRepository @Inject constructor(
                     negativeEnabled = caps.tags
                 )
             )
-        }.getOrNull()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (!allowLegacyFallback) throw plannerFailure(error)
+            null
+        }
 
         val image = planned?.images?.firstOrNull()
         if (image != null) {
@@ -243,10 +255,22 @@ class ImageConsistencyRepository @Inject constructor(
                 negativeExtra = image.negative
             )
         }
+        if (!allowLegacyFallback) throw plannerFailure(null)
         return legacyPlan(bookId, book, source, castKeys, useReferences, size, styleOverride, caps)
     }
 
-    /** 规划器不可用时的兜底：只让模型挑人物与镜头，外貌仍由外貌库提供（旧行为）。 */
+    /** 规划失败时给用户的话：说清"能做什么"，而不是甩一句模型报错。 */
+    private fun plannerFailure(cause: Throwable?): IllegalStateException = IllegalStateException(
+        "画面规划失败：模型没有返回可用的画面。可以试试①在「AI 服务」里给「生图提示词」分配一个更听话的对话模型；" +
+            "②把生图设置里的破限/提示词规范调短一些；③稍后重试。已保存的画风与角色外貌库不受影响。" +
+            (cause?.message?.let { "（原因：$it）" } ?: ""),
+        cause
+    )
+
+    /**
+     * 旧镜头规划的兜底：只让模型挑人物与镜头，外貌仍由外貌库提供。
+     * **只在 [plan] 的 allowLegacyFallback = true 时可达**（目前仅书籍封面）。
+     */
     private suspend fun legacyPlan(bookId: Long, book: ImageBookContext, source: String, castKeys: List<String>?,
         useReferences: Boolean, size: String?, styleOverride: StyleSpec?, caps: ImageCapabilities): ImageRecipe {
         val client = clients.imageGeneration()

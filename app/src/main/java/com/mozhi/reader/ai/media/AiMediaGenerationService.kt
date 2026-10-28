@@ -84,7 +84,6 @@ internal object SpeechCacheKey {
 class AiMediaGenerationService @Inject constructor(
     @ApplicationContext private val context: Context,
     private val clientFactory: AiClientFactory,
-    private val imagePromptComposer: ImagePromptComposer,
     private val illustrations: IllustrationRepository,
     private val speechCache: SpeechCacheStore,
     private val imageConsistency: com.mozhi.reader.core.library.ImageConsistencyRepository,

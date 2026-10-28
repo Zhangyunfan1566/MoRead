@@ -185,6 +185,7 @@ class ClaudeClient(
             } else {
                 options.temperature?.let { put("temperature", it) }
                 options.topP?.let { put("top_p", it) }
+                options.topK?.let { put("top_k", it) }
             }
         }.mergeExtras(options.extraBody)
         return Request.Builder()

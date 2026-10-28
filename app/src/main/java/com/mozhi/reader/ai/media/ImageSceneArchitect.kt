@@ -84,8 +84,10 @@ class ImageSceneArchitect @Inject constructor(
     )
 
     /**
-     * 规划一次画面。走 `ModelRole.CHAT`（因此用户的全局预设也会叠加生效），
-     * 并在最前面压入**生图专用破限**（设置里可编辑，留空回落内置默认）。
+     * 规划一次画面。走 `ModelRole.IMAGE_PROMPT`——**刻意不用 CHAT**：
+     * CHAT 的请求会被套上用户的聊天全局预设（实测一份酒馆预设 23 条启用条目会全部插进来），
+     * 把这里精心排好的消息序冲掉。该角色未分配时由 [AiClientFactory] 回落 CHAT。
+     * 最前面压入**生图专用破限**（设置里可编辑，留空回落内置默认）。
      */
     suspend fun plan(input: Input): Output {
         val settings = imageSettings.current()
@@ -100,7 +102,7 @@ class ImageSceneArchitect @Inject constructor(
             naturalLanguage = nlOn,
             negativeEnabled = input.negativeEnabled
         )
-        val chat = clientFactory.forRole(ModelRole.CHAT)
+        val chat = clientFactory.forRole(ModelRole.IMAGE_PROMPT)
         val raw = try {
             chat.client.chat(messages, chat.options.copy(reasoning = null))
         } catch (cancelled: CancellationException) {

@@ -54,7 +54,18 @@ enum class ModelRole {
     /** Optional dedicated rerank endpoint; leaving it unassigned keeps local fusion ordering. */
     RERANK,
     TTS,
-    IMAGE
+    IMAGE,
+    /**
+     * 生图提示词规划专用通道。
+     *
+     * 为什么必须单独一个角色：出图链路要的是一套**独立**的消息序
+     * （破限 → 后端规范 → 思考清单 → 任务协议 → 正文），而 CHAT 角色的请求会被
+     * `GlobalPresetChatApiClient` 套上用户的聊天全局预设——实测一份酒馆预设是
+     * 23 条启用条目（多数 `role=user`、`depth=4`），它们会插进生图请求里，
+     * 把固定消息序冲掉，也让露骨选段更容易撞上渠道的输入审查。
+     * **未分配时回落 CHAT**，因此不分配也完全可用（行为与旧版一致）。
+     */
+    IMAGE_PROMPT
 }
 
 @Entity(tableName = "books", indices = [Index("collectionId")])

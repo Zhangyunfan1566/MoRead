@@ -67,6 +67,7 @@ class AiClientFactory @Inject constructor(
     suspend fun forRole(role: ModelRole): ResolvedChatClient {
         val (provider, model) = resolve(role)
         val resolved = forModel(provider, model)
+        // 只有 CHAT 角色吃用户的全局预设。IMAGE_PROMPT 刻意不走这里——生图请求有自己的消息序。
         if (role != ModelRole.CHAT) return resolved
         val presets = globalPromptPresetStore.current().filter { it.enabled }
         if (presets.isEmpty()) return resolved
@@ -333,6 +334,7 @@ class AiClientFactory @Inject constructor(
         val modelId = providerDao.getAssignment(role)?.modelId
             ?: (if (role == ModelRole.PROACTIVE_ANNOTATION) providerDao.getAssignment(ModelRole.CHEAP)?.modelId else null)
             ?: (if (role == ModelRole.TRANSLATION) providerDao.getAssignment(ModelRole.CHAT)?.modelId else null)
+            ?: (if (role == ModelRole.IMAGE_PROMPT) providerDao.getAssignment(ModelRole.CHAT)?.modelId else null)
             ?: throw AiClientException.NotConfigured(role.label())
         val model = providerDao.getModel(modelId)
             ?: throw AiClientException.NotConfigured(role.label())
@@ -345,7 +347,8 @@ class AiClientFactory @Inject constructor(
     }
 
     private fun ModelRole.requiredType(): AiModelType = when (this) {
-        ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.SUGGESTION, ModelRole.PROACTIVE_ANNOTATION -> AiModelType.CHAT
+        ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.SUGGESTION,
+        ModelRole.PROACTIVE_ANNOTATION, ModelRole.IMAGE_PROMPT -> AiModelType.CHAT
         ModelRole.EMBEDDING -> AiModelType.EMBEDDING
         ModelRole.RERANK -> AiModelType.RERANK
         ModelRole.TTS -> AiModelType.TTS
@@ -362,6 +365,7 @@ class AiClientFactory @Inject constructor(
         ModelRole.RERANK -> "重排模型"
         ModelRole.TTS -> "TTS 模型"
         ModelRole.IMAGE -> "生图模型"
+        ModelRole.IMAGE_PROMPT -> "生图提示词模型（或主对话模型）"
     }
 
     private companion object {
