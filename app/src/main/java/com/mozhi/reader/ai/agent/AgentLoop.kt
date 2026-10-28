@@ -224,6 +224,8 @@ class AgentLoop @Inject constructor(
         var producedText = false
 
         val roundLimit = maxRounds.coerceIn(1, MAX_ROUNDS)
+        // 去重器按**整轮对话**存活：跨轮重复（模型原地打转）才是主要形态。
+        val deduper = ToolCallDeduper()
         repeat(roundLimit) { round ->
             // Multi-book conversations must recheck frozen consent before sending ANY history.
             validateContext()
@@ -284,7 +286,7 @@ class AgentLoop @Inject constructor(
             history.add(ChatMessage(ChatRole.ASSISTANT, text.toString(), toolCalls = requested))
 
             // 互不依赖的只读调用并发执行；落库与写回历史仍按模型给出的调用顺序。
-            val results = executeTools(requested, byName)
+            val results = executeTools(requested, byName, deduper)
             requested.forEachIndexed { index, call ->
                 val result = results[index]
                 val toolCompletedAt = System.currentTimeMillis()
@@ -313,34 +315,83 @@ class AgentLoop @Inject constructor(
         }
     }
 
+    /**
+     * 执行这一轮的工具调用，并做**同轮去重**（见 [ToolCallDeduper]）。
+     *
+     * 去重在调 [ParallelToolRunner] **之前**完成，不放进 `execute` 回调里：
+     * 回调是并发跑的，"第二条有没有命中缓存"会取决于调度顺序，同一轮里的重复调用就漏掉了。
+     */
     private suspend fun FlowCollector<AgentEvent>.executeTools(
         calls: List<ToolCall>,
-        byName: Map<String, AgentTool>
-    ): List<ToolResult> = toolRunner.run(
-        calls = calls,
-        concurrencySafe = { call -> byName[call.name]?.concurrencySafe == true },
-        execute = { call -> toolExecutor.execute(call, byName[call.name]) }
-    ) { progress ->
-        val call = calls[progress.index]
-        val displayName = byName[call.name]?.displayName ?: "调用 ${call.name}"
-        when (progress) {
-            is ParallelToolRunner.Progress.Started ->
-                emit(AgentEvent.ToolRun(call.id, call.name, displayName, call.arguments))
-            is ParallelToolRunner.Progress.Finished -> {
-                val result = progress.result
-                emit(AgentEvent.ToolFinished(
-                    callId = call.id,
-                    toolName = call.name,
-                    displayName = displayName,
-                    succeeded = result is ToolResult.Success,
-                    detail = when (result) {
-                        is ToolResult.Success -> if (result.partial) "部分完成" else "已完成"
-                        is ToolResult.Failure -> result.content.take(MAX_TOOL_STATUS_CHARS)
-                    },
-                    resultPreview = result.content.take(MAX_TOOL_PREVIEW_CHARS)
-                ))
+        byName: Map<String, AgentTool>,
+        deduper: ToolCallDeduper
+    ): List<ToolResult> {
+        val plan = deduper.plan(calls)
+
+        // 复用的调用也播一次"完成"，界面上看得出这条没有真跑。
+        plan.reused.forEach { (index, result) ->
+            val call = calls[index]
+            emit(AgentEvent.ToolRun(call.id, call.name, displayNameOf(call, byName), call.arguments))
+            emit(toolFinishedEvent(call, byName, result, detail = "复用上次结果"))
+        }
+
+        val freshResults = toolRunner.run(
+            calls = plan.fresh.map { it.second },
+            concurrencySafe = { call -> byName[call.name]?.concurrencySafe == true },
+            execute = { call -> toolExecutor.execute(call, byName[call.name]) }
+        ) { progress ->
+            val call = plan.fresh[progress.index].second
+            val displayName = displayNameOf(call, byName)
+            when (progress) {
+                is ParallelToolRunner.Progress.Started ->
+                    emit(AgentEvent.ToolRun(call.id, call.name, displayName, call.arguments))
+                is ParallelToolRunner.Progress.Finished ->
+                    emit(toolFinishedEvent(call, byName, progress.result))
             }
         }
+
+        val byIndex = HashMap<Int, ToolResult>()
+        plan.fresh.forEachIndexed { index, entry ->
+            val (original, call) = entry
+            byIndex[original] = freshResults[index]
+            deduper.remember(call, freshResults[index])
+        }
+        // 本轮内的重复：结果就是它重复的那条的结果。
+        plan.duplicateOf.forEach { (index, first) ->
+            val source = byIndex[first]
+            byIndex[index] = source?.withReuseNote()
+                ?: ToolResult.Failure("DUPLICATE_CALL", "这次调用与同一轮里的另一次完全相同，已跳过。")
+        }
+        plan.reused.forEach { (index, result) -> byIndex[index] = result.withReuseNote() }
+
+        return calls.indices.map { index ->
+            byIndex[index] ?: ToolResult.Failure("DEDUP_MISS", "这次调用的结果缺失，请重新发起。")
+        }
+    }
+
+    private fun displayNameOf(call: ToolCall, byName: Map<String, AgentTool>): String =
+        byName[call.name]?.displayName ?: "调用 ${call.name}"
+
+    private fun toolFinishedEvent(
+        call: ToolCall,
+        byName: Map<String, AgentTool>,
+        result: ToolResult,
+        detail: String? = null
+    ): AgentEvent.ToolFinished = AgentEvent.ToolFinished(
+        callId = call.id,
+        toolName = call.name,
+        displayName = displayNameOf(call, byName),
+        succeeded = result is ToolResult.Success,
+        detail = detail ?: when (result) {
+            is ToolResult.Success -> if (result.partial) "部分完成" else "已完成"
+            is ToolResult.Failure -> result.content.take(MAX_TOOL_STATUS_CHARS)
+        },
+        resultPreview = result.content.take(MAX_TOOL_PREVIEW_CHARS)
+    )
+
+    /** 复用结果时把"这条没真跑"写进工具结果本身——模型看得到，不会误以为是新查到的东西。 */
+    private fun ToolResult.withReuseNote(): ToolResult = mapContent { content ->
+        content + "\n\n（本次没有重复执行：这一轮已经用相同参数调用过这个工具，以上是上次的结果。）"
     }
 
     private suspend fun persistAssistant(
@@ -480,7 +531,8 @@ class AgentLoop @Inject constructor(
     }
 
     private companion object {
-        const val MAX_ROUNDS = 8
+        /** 单轮对话的工具跳数上限。有了 [ToolCallDeduper]，多出来的跳数不会被原地打转吃掉。 */
+        const val MAX_ROUNDS = 12
         const val INTERRUPTED_TOOL_RESULT = "（这次工具调用被中断，没有结果）"
         const val DETACHED_MAX_ROUNDS = 3
         const val WINDOW_MESSAGES = 20

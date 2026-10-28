@@ -40,6 +40,13 @@ class GlobalPresetSettingsViewModel @Inject constructor(
         TavernRequestSettings()
     )
 
+    /** 导入的正则脚本。列表与单条开关都在这里，改完立刻对下一轮请求生效。 */
+    val regexScripts = regexStore.scripts.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        emptyList()
+    )
+
     val worldInfo = worldInfoStore.worldInfo.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -174,6 +181,17 @@ class GlobalPresetSettingsViewModel @Inject constructor(
             }.onFailure { error ->
                 eventChannel.send(GlobalPresetEvent.Message(error.message ?: "写入失败"))
             }
+        }
+    }
+
+    fun setRegexEnabled(id: String, enabled: Boolean) {
+        viewModelScope.launch { regexStore.setEnabled(id, enabled) }
+    }
+
+    fun clearRegexScripts() {
+        viewModelScope.launch {
+            regexStore.clear()
+            eventChannel.send(GlobalPresetEvent.Message("正则脚本已清空"))
         }
     }
 

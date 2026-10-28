@@ -53,6 +53,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.ai.prompt.SillyTavernPresetImporter
 import com.mozhi.reader.ai.prompt.TavernContextBudget
+import com.mozhi.reader.ai.prompt.TavernRegexScript
 import com.mozhi.reader.ai.prompt.TavernWorldInfoImporter
 import com.mozhi.reader.core.datastore.TavernRequestSettings
 import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
@@ -78,6 +79,8 @@ fun GlobalPresetSettingsScreen(
     val worldInfo by viewModel.worldInfo.collectAsStateWithLifecycle()
     val worldInfoPreview by viewModel.worldInfoPreview.collectAsStateWithLifecycle()
     val requestSettings by viewModel.requestSettings.collectAsStateWithLifecycle()
+    val regexScripts by viewModel.regexScripts.collectAsStateWithLifecycle()
+    var regexExpanded by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -196,6 +199,53 @@ fun GlobalPresetSettingsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
+                            Text("正则脚本", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                if (regexScripts.isEmpty()) {
+                                    "未导入。预设里的正则脚本（八股抹除、破折号处理…）会随预设一起进来。"
+                                } else {
+                                    regexScripts.count { it.enabled }.toString() + " 条启用 · 共 " +
+                                        regexScripts.size + " 条" + if (regexExpanded) "" else "（展开可逐条开关）"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (regexScripts.isNotEmpty()) {
+                            TextButton(onClick = { regexExpanded = !regexExpanded }) {
+                                Text(if (regexExpanded) "收起" else "展开")
+                            }
+                            TextButton(onClick = viewModel::clearRegexScripts) { Text("清空") }
+                        }
+                    }
+                }
+                if (regexExpanded) {
+                    items(regexScripts, key = { it.id }) { script ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(script.name, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    script.ruleSummary(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = script.enabled,
+                                onCheckedChange = { viewModel.setRegexEnabled(script.id, it) }
+                            )
+                        }
+                    }
+                }
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
                             Text("套用预设的采样参数", style = MaterialTheme.typography.titleSmall)
                             Text(
                                 requestSettings.samplingSummary(),
@@ -287,6 +337,27 @@ fun GlobalPresetSettingsScreen(
             onConfirm = viewModel::confirmWorldInfoImport
         )
     }
+}
+
+/** 一条正则脚本的作用范围摘要：作用在谁身上、深度窗口、是否只给显示用。 */
+internal fun TavernRegexScript.ruleSummary(): String {
+    val placement = placements.joinToString("、") { position ->
+        when (position) {
+            TavernRegexScript.PLACEMENT_USER_INPUT -> "用户输入"
+            TavernRegexScript.PLACEMENT_AI_OUTPUT -> "AI 输出"
+            TavernRegexScript.PLACEMENT_WORLD_INFO -> "世界书"
+            TavernRegexScript.PLACEMENT_REASONING -> "思维链"
+            else -> "位置 " + position
+        }
+    }
+    val depth = when {
+        minDepth != null && maxDepth != null -> "深度 " + minDepth + "-" + maxDepth
+        minDepth != null -> "深度 ≥" + minDepth
+        maxDepth != null -> "深度 ≤" + maxDepth
+        else -> null
+    }
+    val displayOnly = if (markdownOnly && !promptOnly) "仅显示，不进提示词" else null
+    return listOfNotNull(placement.takeIf { it.isNotBlank() }, depth, displayOnly).joinToString(" · ")
 }
 
 /** 预设采样参数的一行摘要；没有可应用的值时明说，避免用户以为开关坏了。 */
