@@ -16,6 +16,7 @@ import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.TavernRegexStore
 import com.mozhi.reader.core.datastore.TavernVariableStore
+import com.mozhi.reader.core.datastore.TavernWorldInfoStore
 import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.media.ImageApiProvider
 import com.mozhi.reader.core.media.ImageApiSettingsStore
@@ -61,6 +62,7 @@ class AiClientFactory @Inject constructor(
     private val globalPromptPresetStore: GlobalPromptPresetStore,
     private val tavernVariableStore: TavernVariableStore,
     private val tavernRegexStore: TavernRegexStore,
+    private val tavernWorldInfoStore: TavernWorldInfoStore,
     private val userMaskStore: UserMaskStore,
     private val settingsRepository: ReaderSettingsRepository,
     private val personaDao: PersonaDao
@@ -79,6 +81,7 @@ class AiClientFactory @Inject constructor(
                 presets = presets,
                 variableStore = tavernVariableStore,
                 regexStore = tavernRegexStore,
+                worldInfoStore = tavernWorldInfoStore,
                 macroContext = { tavernMacroContext() }
             )
         )

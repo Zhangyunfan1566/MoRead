@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.ai.prompt.SillyTavernPresetImporter
+import com.mozhi.reader.ai.prompt.TavernWorldInfoImporter
 import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.PromptRole
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
@@ -72,6 +73,8 @@ fun GlobalPresetSettingsScreen(
     val presets by viewModel.presets.collectAsStateWithLifecycle()
     val importPreview by viewModel.importPreview.collectAsStateWithLifecycle()
     val importFlatten by viewModel.importFlatten.collectAsStateWithLifecycle()
+    val worldInfo by viewModel.worldInfo.collectAsStateWithLifecycle()
+    val worldInfoPreview by viewModel.worldInfoPreview.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -88,6 +91,23 @@ fun GlobalPresetSettingsScreen(
                 }
                 bytes.toString(Charsets.UTF_8)
             }.onSuccess(viewModel::previewTavernImport)
+                .onFailure { error ->
+                    scope.launch { snackbar.showSnackbar(error.message ?: "读取失败") }
+                }
+        }
+    }
+
+    // 选一个酒馆世界书 JSON（Lorebook）。它不在预设文件里，是单独一份文件。
+    val worldInfoImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: error("读不到这个文件")
+                if (bytes.size > MAX_TAVERN_PRESET_BYTES) {
+                    error("文件超过 ${MAX_TAVERN_PRESET_BYTES / 1024 / 1024}MB，不像是世界书 JSON")
+                }
+                bytes.toString(Charsets.UTF_8)
+            }.onSuccess(viewModel::previewWorldInfoImport)
                 .onFailure { error ->
                     scope.launch { snackbar.showSnackbar(error.message ?: "读取失败") }
                 }
@@ -144,6 +164,40 @@ fun GlobalPresetSettingsScreen(
                     )
                 }
                 item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("世界书", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                when {
+                                    worldInfo.entries.isEmpty() -> "未导入。酒馆预设里的世界书标记要配一份世界书 JSON 才会生效。"
+                                    else -> "${worldInfo.entries.size} 条" +
+                                        worldInfo.sourceName.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty() +
+                                        if (worldInfo.enabled) "" else " · 已关闭"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (worldInfo.entries.isNotEmpty()) {
+                            TextButton(onClick = viewModel::clearWorldInfo) { Text("清空") }
+                            Switch(checked = worldInfo.enabled, onCheckedChange = viewModel::setWorldInfoEnabled)
+                        }
+                    }
+                }
+                item {
+                    DashedAddRow(
+                        label = "导入世界书（JSON）",
+                        onClick = {
+                            worldInfoImport.launch(
+                                arrayOf("application/json", "text/plain", "application/octet-stream", "*/*")
+                            )
+                        }
+                    )
+                }
+                item {
                     DashedAddRow(
                         label = "添加自定义预设",
                         onClick = {
@@ -181,6 +235,63 @@ fun GlobalPresetSettingsScreen(
             onConfirm = viewModel::confirmTavernImport
         )
     }
+
+    worldInfoPreview?.let { result ->
+        WorldInfoImportDialog(
+            result = result,
+            onDismiss = viewModel::dismissWorldInfoImport,
+            onConfirm = viewModel::confirmWorldInfoImport
+        )
+    }
+}
+
+/** 世界书导入确认：说清楚"几条会按关键词触发、几条常驻、几条被跳过"。 */
+@Composable
+internal fun WorldInfoImportDialog(
+    result: TavernWorldInfoImporter.Result,
+    onDismiss: () -> Unit,
+    onConfirm: (Boolean) -> Unit
+) {
+    val constant = result.entries.count { it.constant }
+    val keyword = result.entries.size - constant
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("导入世界书") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                result.sourceName?.takeIf { it.isNotBlank() }?.let {
+                    Text("来源：$it", style = MaterialTheme.typography.bodySmall)
+                }
+                Text("共 ${result.entries.size} 条：常驻 $constant 条、关键词触发 $keyword 条。")
+                Text(
+                    "关键词触发会扫描最近几条消息，命中才注入；常驻条目每次都注入。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (result.skipped.isNotEmpty()) {
+                    Text(
+                        "跳过 ${result.skipped.size} 条：${result.skipped.take(3).joinToString("；") { it.name + "（" + it.reason + "）" }}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    "按 id 合并进现有世界书，不会清掉你已经导入的条目。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(true) }) { Text("导入并启用") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onDismiss) { Text("取消") }
+                TextButton(onClick = { onConfirm(false) }) { Text("仅导入") }
+            }
+        }
+    )
 }
 
 /** 酒馆预设导入确认：先说清楚"能导入几条、跳过几条、为什么跳过"，再让用户决定是否启用。 */

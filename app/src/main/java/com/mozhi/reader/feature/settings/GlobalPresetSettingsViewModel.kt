@@ -5,7 +5,10 @@ import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.prompt.SillyTavernPresetImporter
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
+import com.mozhi.reader.ai.prompt.TavernWorldInfoImporter
 import com.mozhi.reader.core.datastore.TavernRegexStore
+import com.mozhi.reader.core.datastore.TavernWorldInfo
+import com.mozhi.reader.core.datastore.TavernWorldInfoStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
@@ -24,8 +27,19 @@ sealed interface GlobalPresetEvent {
 @HiltViewModel
 class GlobalPresetSettingsViewModel @Inject constructor(
     private val store: GlobalPromptPresetStore,
-    private val regexStore: TavernRegexStore
+    private val regexStore: TavernRegexStore,
+    private val worldInfoStore: TavernWorldInfoStore
 ) : ViewModel() {
+
+    val worldInfo = worldInfoStore.worldInfo.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        TavernWorldInfo()
+    )
+
+    /** 世界书导入预览；非空时界面弹确认框。 */
+    private val _worldInfoPreview = MutableStateFlow<TavernWorldInfoImporter.Result?>(null)
+    val worldInfoPreview = _worldInfoPreview.asStateFlow()
     val presets = store.presets.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -98,6 +112,59 @@ class GlobalPresetSettingsViewModel @Inject constructor(
             }.onFailure { error ->
                 eventChannel.send(GlobalPresetEvent.Message(error.message ?: "写入失败"))
             }
+        }
+    }
+
+    /** 解析世界书 JSON，先出预览再落库。 */
+    fun previewWorldInfoImport(text: String) {
+        runCatching { TavernWorldInfoImporter.import(text) }
+            .onSuccess { _worldInfoPreview.value = it }
+            .onFailure { error ->
+                viewModelScope.launch { eventChannel.send(GlobalPresetEvent.Message(error.message ?: "世界书解析失败")) }
+            }
+    }
+
+    fun dismissWorldInfoImport() {
+        _worldInfoPreview.value = null
+    }
+
+    /**
+     * 确认导入。**按 id 合并**而不是整表替换：酒馆的世界书是一个个文件，
+     * 用户很可能分几次导入，直接覆盖会把上一份悄悄清掉。
+     * [enabled] 为 true 才把总开关打开；false 时保持现状，不因为"只导入"而关掉已有世界书。
+     */
+    fun confirmWorldInfoImport(enabled: Boolean) {
+        val result = _worldInfoPreview.value ?: return
+        viewModelScope.launch {
+            runCatching {
+                val current = worldInfoStore.current()
+                val incomingIds = result.entries.map { it.id }.toSet()
+                val merged = current.entries.filterNot { it.id in incomingIds } + result.entries
+                worldInfoStore.save(
+                    current.copy(
+                        entries = merged,
+                        sourceName = result.sourceName?.takeIf { it.isNotBlank() } ?: current.sourceName,
+                        enabled = if (enabled) true else current.enabled
+                    )
+                )
+            }.onSuccess {
+                _worldInfoPreview.value = null
+                val tail = if (result.skipped.isEmpty()) "" else "，跳过 ${result.skipped.size} 条"
+                eventChannel.send(GlobalPresetEvent.Message("已导入世界书 ${result.entries.size} 条$tail"))
+            }.onFailure { error ->
+                eventChannel.send(GlobalPresetEvent.Message(error.message ?: "写入失败"))
+            }
+        }
+    }
+
+    fun setWorldInfoEnabled(enabled: Boolean) {
+        viewModelScope.launch { worldInfoStore.setEnabled(enabled) }
+    }
+
+    fun clearWorldInfo() {
+        viewModelScope.launch {
+            worldInfoStore.clear()
+            eventChannel.send(GlobalPresetEvent.Message("世界书已清空"))
         }
     }
 
