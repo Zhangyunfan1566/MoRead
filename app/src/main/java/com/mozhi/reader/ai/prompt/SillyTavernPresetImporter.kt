@@ -22,6 +22,10 @@ import kotlinx.serialization.json.intOrNull
  * - `injection_position = 1`（absolute）按角色映射到锚点（system → 主提示词之后，
  *   user → 最近用户消息之前，assistant → 最近用户消息之后 = 预填充位）；
  * - `identifier` 原样记录；`prompt_order` 的先后与开关一并保留；
+ * - **marker 判定以条目字段为准**：酒馆靠 prompt 对象上的 `marker` 布尔值决定是否注入，
+ *   本应用原先只看 identifier 名单，会把用户**真的想注入**的条目（实测：一份真实预设用
+ *   `enhanceDefinitions` 承载「🛡️破限[顶]」，字段 `marker = false`）静默丢掉。
+ *   现在改为「字段优先，字段缺失时才回落到 identifier 名单」；
  * - **marker 条目不再丢弃**：以 `marker = true` 收进 [Result.markers]，可见、可手动改成可注入；
  * - 内容里出现不支持的宏（`getvar` / `roll` / `#if` …）时，在 [Result.unsupportedMacros] 里列出**提示**，
  *   不静默改写内容。
@@ -32,7 +36,10 @@ object SillyTavernPresetImporter {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    /** 酒馆预设里由宿主替换的占位条目；导入后标 `marker = true`，保留但不注入。 */
+    /**
+     * 酒馆预设里由宿主替换的占位条目。**只在条目自身没有 `marker` 字段时**才当作 marker——
+     * 这是回落用的名单，不是权威判据（见类注释）。
+     */
     private val MARKER_IDENTIFIERS = setOf(
         "main",
         "worldInfoBefore",
@@ -100,7 +107,8 @@ object SillyTavernPresetImporter {
             val identifier = entry.str("identifier")
             val name = entry.str("name").ifBlank { identifier.ifBlank { "条目 ${index + 1}" } }
             val content = entry.str("content")
-            val isMarker = entry.bool("marker") == true || identifier in MARKER_IDENTIFIERS
+            // 字段优先：显式 false 就是「要注入」，不再被 identifier 名单覆盖。
+            val isMarker = entry.bool("marker") ?: (identifier in MARKER_IDENTIFIERS)
             val order = orderEnabled[identifier]?.first ?: index
             val enabled = orderEnabled[identifier]?.second ?: entry.bool("enabled") ?: true
 
@@ -178,10 +186,15 @@ object SillyTavernPresetImporter {
         )
     }
 
-    /** 酒馆的 `role` → 本应用角色。缺省 system。 */
+    /**
+     * 酒馆的 `role` → 本应用角色。缺省 system。
+     *
+     * `model` 也映射到 assistant：部分预设（含实测那份）用 `model` 表示模型侧发言，
+     * 语义等同 assistant；落到 else 会变成 system，把预填充变成一条系统提示，行为完全不同。
+     */
     private fun JsonObject.role(): PromptRole = when (str("role").lowercase()) {
         "user" -> PromptRole.USER
-        "assistant" -> PromptRole.ASSISTANT
+        "assistant", "model" -> PromptRole.ASSISTANT
         else -> PromptRole.SYSTEM
     }
 

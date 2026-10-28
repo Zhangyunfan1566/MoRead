@@ -7,6 +7,7 @@ import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
 import com.mozhi.reader.core.datastore.PromptRole
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -237,11 +238,25 @@ class GlobalPromptInjectorTest {
     }
 
     @Test
-    fun `未支持宏会被列出来（含参数与条件写法）`() {
+    fun `已实现的宏不再算未支持，只剩真正的未知宏`() {
         val macros = GlobalPromptInjector.unsupportedMacros(
             "{{getvar::hp}} {{roll 1d20}} {{#if flag}} {{char}} {{user}} {{// c}}"
         )
-        assertEquals(listOf("getvar", "roll", "if"), macros)
+        assertEquals(emptyList<String>(), macros)
+        assertEquals(
+            listOf("weirdmacro"),
+            GlobalPromptInjector.unsupportedMacros("{{getvar::hp}} {{weirdmacro}}")
+        )
+    }
+
+    @Test
+    fun `无作用域时变量宏原样保留`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(preset(prompt = "{{setvar::k::v}}{{getvar::k}}", depth = 0)),
+            macros = MacroContext()
+        )
+        assertTrue(out.last().content.contains("{{setvar::k::v}}{{getvar::k}}"))
     }
 
     @Test
@@ -252,6 +267,81 @@ class GlobalPromptInjectorTest {
             macros = MacroContext(characterName = "小雪")
         )
         assertTrue(out.last().content.contains("称呼 小雪"))
+    }
+
+    // ---------- ⑥b 变量作用域：实测预设赖以生效的机制 ----------
+
+    @Test
+    fun `同轮内先 setvar 后 getvar 生效（按 order 求值）`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(
+                preset(id = "loader", name = "装载", prompt = "{{setvar::jb::[破限正文]}}", depth = 0, order = 1),
+                preset(id = "user", name = "使用", prompt = "正文：{{getvar::jb}}", depth = 0, order = 2)
+            ),
+            variables = TavernVariables()
+        )
+        assertEquals(6, out.size)
+        assertTrue(out[4].content.contains("正文：[破限正文]"))
+        assertFalse(out[4].content.contains("{{"))
+    }
+
+    @Test
+    fun `宏求值按 order 而不是按落位顺序`() {
+        // 装载条目落在 system 锚点（靠前落位），使用条目落在深度 0（靠后落位）。
+        // 若实现是"边落位边渲染"，使用条目会先于装载条目求值，取到空值。
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(
+                preset(id = "loader", name = "装载", prompt = "{{setvar::k::值}}",
+                    position = GlobalPromptInjectionPosition.AFTER_SYSTEM, order = 1),
+                preset(id = "use", name = "使用", prompt = "取到：{{getvar::k}}", depth = 0, order = 2)
+            ),
+            variables = TavernVariables()
+        )
+        assertTrue(out.last().content.contains("取到：值"))
+    }
+
+    @Test
+    fun `作用域写入可被调用方回读落库`() {
+        val variables = TavernVariables(mapOf("seed" to "旧值"))
+        GlobalPromptInjector.inject(
+            conversation(),
+            listOf(preset(prompt = "{{setvar::seed::新值}}", depth = 0)),
+            variables = variables
+        )
+        assertTrue(variables.dirty)
+        assertEquals("新值", variables.snapshot()["seed"])
+    }
+
+    @Test
+    fun `条件块按变量走分支`() {
+        val variables = TavernVariables(mapOf("nsfw" to "1"))
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(preset(prompt = "{{#if nsfw}}成人条款{{else}}普通条款{{/if}}", depth = 0)),
+            variables = variables
+        )
+        assertTrue(out.last().content.contains("成人条款"))
+        assertFalse(out.last().content.contains("普通条款"))
+    }
+
+    @Test
+    fun `contextFor 取出最后一条用户与助手正文`() {
+        val context = GlobalPromptInjector.contextFor(conversation(), MacroContext(characterName = "小雪"))
+        assertEquals("小雪", context.characterName)
+        assertEquals("U2", context.lastUserMessage)
+        assertEquals("A1", context.lastCharMessage)
+    }
+
+    @Test
+    fun `注入时消息宏直接可用`() {
+        val out = GlobalPromptInjector.inject(
+            conversation(),
+            listOf(preset(prompt = "上一句：{{lastusermessage}}", depth = 0)),
+            macros = GlobalPromptInjector.contextFor(conversation())
+        )
+        assertTrue(out.last().content.contains("上一句：U2"))
     }
 
     // ---------- ⑦ 组合：酒馆式布局 ----------

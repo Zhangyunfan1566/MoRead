@@ -3,7 +3,9 @@ package com.mozhi.reader.ai.client
 import com.mozhi.reader.ai.provider.AiProviderRepository
 import com.mozhi.reader.ai.provider.ModelProtocolRoute
 import com.mozhi.reader.ai.provider.ProviderProtocolPolicy
+import com.mozhi.reader.ai.prompt.MacroContext
 import com.mozhi.reader.core.database.dao.AiProviderDao
+import com.mozhi.reader.core.database.dao.PersonaDao
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.AiProviderType
 import com.mozhi.reader.core.database.entity.AiModelEntity
@@ -11,6 +13,9 @@ import com.mozhi.reader.core.database.entity.AiModelType
 import com.mozhi.reader.core.database.entity.AiProviderAdapter
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
+import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.core.datastore.TavernVariableStore
+import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.media.ImageApiProvider
 import com.mozhi.reader.core.media.ImageApiSettingsStore
 import com.mozhi.reader.core.security.ApiKeyStore
@@ -19,6 +24,7 @@ import com.mozhi.reader.core.speech.TtsSettings
 import com.mozhi.reader.core.speech.TtsApiProvider
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.first
 import okhttp3.OkHttpClient
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -51,7 +57,11 @@ class AiClientFactory @Inject constructor(
     private val imageApiSettingsStore: ImageApiSettingsStore,
     private val apiKeyStore: ApiKeyStore,
     private val httpClient: OkHttpClient,
-    private val globalPromptPresetStore: GlobalPromptPresetStore
+    private val globalPromptPresetStore: GlobalPromptPresetStore,
+    private val tavernVariableStore: TavernVariableStore,
+    private val userMaskStore: UserMaskStore,
+    private val settingsRepository: ReaderSettingsRepository,
+    private val personaDao: PersonaDao
 ) {
     /** Resolves the model assigned to [role] or throws a guided [AiClientException]. */
     suspend fun forRole(role: ModelRole): ResolvedChatClient {
@@ -59,8 +69,31 @@ class AiClientFactory @Inject constructor(
         val resolved = forModel(provider, model)
         if (role != ModelRole.CHAT) return resolved
         val presets = globalPromptPresetStore.current().filter { it.enabled }
-        return if (presets.isEmpty()) resolved else resolved.copy(
-            client = GlobalPresetChatApiClient(resolved.client, presets)
+        if (presets.isEmpty()) return resolved
+        return resolved.copy(
+            client = GlobalPresetChatApiClient(
+                delegate = resolved.client,
+                presets = presets,
+                variableStore = tavernVariableStore,
+                macroContext = { tavernMacroContext() }
+            )
+        )
+    }
+
+    /**
+     * 酒馆身份宏的来源：`{{char}}` 取当前角色卡名字，`{{user}}` 取用户面具名字，
+     * `{{persona}}` 取角色卡的人设描述。取不到就留空——此时对应宏原样保留在提示词里，
+     * 用户能在输出里一眼看出「这个宏没被替换」，比静默替换成空串好排查。
+     */
+    private suspend fun tavernMacroContext(): MacroContext {
+        val persona = runCatching {
+            settingsRepository.activePersonaId.first()?.let { personaDao.getPersona(it) }
+        }.getOrNull()
+        val mask = runCatching { userMaskStore.activeMask() }.getOrNull()
+        return MacroContext(
+            characterName = persona?.name.orEmpty(),
+            userName = mask?.name.orEmpty(),
+            persona = persona?.personality.orEmpty()
         )
     }
 

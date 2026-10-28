@@ -7,11 +7,18 @@ import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
 import com.mozhi.reader.core.datastore.PromptRole
 
-/** 宏替换上下文；缺省（null）时不替换任何宏。 */
+/**
+ * 宏替换上下文；缺省（null）时不替换任何宏。
+ *
+ * [lastUserMessage] / [lastCharMessage] 供酒馆的 `{{lastusermessage}}` / `{{lastcharmessage}}` 使用，
+ * 由注入方从消息列表里就地取出（见 [GlobalPromptInjector.contextFor]）。
+ */
 data class MacroContext(
     val characterName: String = "",
     val userName: String = "",
-    val persona: String = ""
+    val persona: String = "",
+    val lastUserMessage: String = "",
+    val lastCharMessage: String = ""
 )
 
 /**
@@ -28,22 +35,29 @@ data class MacroContext(
  *
  * 三组的插入点都在同一次调用里先算好、再**从后往前**落位，避免下标漂移；
  * 同一插入点的多条按 [GlobalPromptPreset.order] 保持先后。
+ *
+ * **宏求值顺序**：所有启用条目先按 `order` **完整渲染一遍**（而不是在落位时各渲染各的），
+ * 再按锚点/深度落位。这样 `{{setvar}}` 的副作用对同一轮里靠后的 `{{getvar}}` 可见——
+ * 真实酒馆预设正是靠这个机制把破限正文装进变量、再在别处取出来的。
  */
 object GlobalPromptInjector {
-
-    /** 酒馆 preset 里常见的宏；注入时支持这几个，其余会被 [unsupportedMacros] 标出来。 */
-    private val SUPPORTED_MACROS = setOf("char", "user", "persona")
 
     fun inject(
         messages: List<ChatMessage>,
         presets: List<GlobalPromptPreset>,
         label: String = "全局预设",
-        macros: MacroContext? = null
+        macros: MacroContext? = null,
+        variables: TavernVariables? = null
     ): List<ChatMessage> {
         val active = presets
             .filter { it.enabled && it.prompt.isNotBlank() && !it.marker }
             .sortedWith(compareBy({ it.order }, { it.name }))
         if (active.isEmpty()) return messages
+
+        // 先按 order 顺序渲染全部条目：宏副作用（setvar）在这里产生，后面的条目能读到。
+        val rendered = active.associate { preset ->
+            preset.id to ("【$label·${preset.name}】\n" + TavernMacros.render(preset.prompt.trim(), macros, variables))
+        }
 
         val output = messages.toMutableList()
 
@@ -55,7 +69,7 @@ object GlobalPromptInjector {
                     (it.position == GlobalPromptInjectionPosition.BEFORE_SYSTEM ||
                         it.position == GlobalPromptInjectionPosition.AFTER_SYSTEM)
             },
-            label, macros
+            rendered
         )
 
         // ② 拼接进最后一条 user 消息（旧行为）
@@ -66,7 +80,7 @@ object GlobalPromptInjector {
                     (it.position == GlobalPromptInjectionPosition.BEFORE_LAST_USER ||
                         it.position == GlobalPromptInjectionPosition.AFTER_LAST_USER)
             },
-            label, macros
+            rendered
         )
 
         // ③ 其余一律作为独立消息插入（深度组 + 非 SYSTEM 角色 + 历史锚点）
@@ -78,10 +92,7 @@ object GlobalPromptInjector {
         if (standalone.isEmpty()) return output
 
         val inserts = standalone.map { preset ->
-            insertionIndex(output, preset) to ChatMessage(
-                preset.role.toChatRole(),
-                preset.render(label, macros)
-            )
+            insertionIndex(output, preset) to ChatMessage(preset.role.toChatRole(), rendered[preset.id].orEmpty())
         }
         // 先算后插：按插入点从后往前落位，同一点内保持 order 先后
         inserts.groupBy({ it.first }, { it.second })
@@ -93,17 +104,24 @@ object GlobalPromptInjector {
         return output
     }
 
+    /** 从消息列表里就地取出 `{{lastusermessage}}` / `{{lastcharmessage}}` 需要的两条正文。 */
+    fun contextFor(messages: List<ChatMessage>, base: MacroContext? = null): MacroContext {
+        val lastUser = messages.lastOrNull { it.role == ChatRole.USER }?.content.orEmpty()
+        val lastChar = messages.lastOrNull { it.role == ChatRole.ASSISTANT }?.content.orEmpty()
+        val context = base ?: MacroContext()
+        return context.copy(lastUserMessage = lastUser, lastCharMessage = lastChar)
+    }
+
     private fun mergeSystem(
         messages: MutableList<ChatMessage>,
         presets: List<GlobalPromptPreset>,
-        label: String,
-        macros: MacroContext?
+        rendered: Map<String, String>
     ) {
         if (presets.isEmpty()) return
         val before = presets.filter { it.position == GlobalPromptInjectionPosition.BEFORE_SYSTEM }
-            .joinToString("\n") { it.render(label, macros) }
+            .joinToString("\n") { rendered[it.id].orEmpty() }
         val after = presets.filter { it.position == GlobalPromptInjectionPosition.AFTER_SYSTEM }
-            .joinToString("\n") { it.render(label, macros) }
+            .joinToString("\n") { rendered[it.id].orEmpty() }
         if (before.isBlank() && after.isBlank()) return
         val systemIndex = messages.indexOfFirst { it.role == ChatRole.SYSTEM }
         if (systemIndex >= 0) {
@@ -119,14 +137,13 @@ object GlobalPromptInjector {
     private fun mergeLastUser(
         messages: MutableList<ChatMessage>,
         presets: List<GlobalPromptPreset>,
-        label: String,
-        macros: MacroContext?
+        rendered: Map<String, String>
     ) {
         if (presets.isEmpty()) return
         val before = presets.filter { it.position == GlobalPromptInjectionPosition.BEFORE_LAST_USER }
-            .joinToString("\n") { it.render(label, macros) }
+            .joinToString("\n") { rendered[it.id].orEmpty() }
         val after = presets.filter { it.position == GlobalPromptInjectionPosition.AFTER_LAST_USER }
-            .joinToString("\n") { it.render(label, macros) }
+            .joinToString("\n") { rendered[it.id].orEmpty() }
         if (before.isBlank() && after.isBlank()) return
         val userIndex = messages.indexOfLast { it.role == ChatRole.USER }
         if (userIndex < 0) return
@@ -148,33 +165,20 @@ object GlobalPromptInjector {
         }
     }
 
-    private fun GlobalPromptPreset.render(label: String, macros: MacroContext?): String =
-        "【$label·$name】\n" + applyMacros(prompt.trim(), macros)
+    /** 不传作用域的基础宏替换：身份宏 + 注释 + 消息宏；变量 / 随机 / 条件宏原样保留。 */
+    internal fun applyMacros(text: String, macros: MacroContext?): String =
+        TavernMacros.render(text, macros, null)
 
-    /**
-     * 基础宏替换：`{{char}}` / `{{user}}` / `{{persona}}`，以及酒馆的注释 `{{// … }}`。
-     * **高级宏（`getvar` / `setvar` / `roll` / `#if`）不执行**——原样保留，由 [unsupportedMacros] 提示用户。
-     */
-    internal fun applyMacros(text: String, macros: MacroContext?): String {
-        var out = Regex("\\{\\{//[^}]*}}").replace(text, "")
-        if (macros == null) return out
-        if (macros.characterName.isNotBlank()) out = out.replace("{{char}}", macros.characterName)
-        if (macros.userName.isNotBlank()) out = out.replace("{{user}}", macros.userName)
-        if (macros.persona.isNotBlank()) out = out.replace("{{persona}}", macros.persona)
-        return out
-    }
+    /** 带作用域的完整替换（变量、随机、条件块都生效）。 */
+    internal fun applyMacros(text: String, macros: MacroContext?, variables: TavernVariables?): String =
+        TavernMacros.render(text, macros, variables)
 
-    /** 列出文本里**不被支持**的宏名（供导入预览提示；不修改内容）。 */
-    fun unsupportedMacros(text: String): List<String> = Regex("\\{\\{([^{}]+)}}")
-        .findAll(text)
-        .map { match ->
-            match.groupValues[1].trim()
-                .removePrefix("#").removePrefix("^").removePrefix("/")
-                .substringBefore(':').substringBefore(' ').trim()
-        }
-        .filter { it.isNotBlank() && it.lowercase() !in SUPPORTED_MACROS }
-        .distinct()
-        .toList()
+    /** 列出文本里**不被执行**的宏名（供导入预览提示；不修改内容）。 */
+    fun unsupportedMacros(text: String): List<String> = TavernMacros.unknownMacros(text)
+
+    /** 文本里引用、但作用域里没有值的变量名；空作用域返回空表。 */
+    fun unresolvedVariables(text: String, variables: TavernVariables?): List<String> =
+        TavernMacros.unresolvedVariables(text, variables)
 
     private fun PromptRole.toChatRole(): ChatRole = when (this) {
         PromptRole.SYSTEM -> ChatRole.SYSTEM
