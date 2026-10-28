@@ -52,7 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.reader.ai.prompt.SillyTavernPresetImporter
+import com.mozhi.reader.ai.prompt.TavernContextBudget
 import com.mozhi.reader.ai.prompt.TavernWorldInfoImporter
+import com.mozhi.reader.core.datastore.TavernRequestSettings
 import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.PromptRole
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
@@ -75,6 +77,7 @@ fun GlobalPresetSettingsScreen(
     val importFlatten by viewModel.importFlatten.collectAsStateWithLifecycle()
     val worldInfo by viewModel.worldInfo.collectAsStateWithLifecycle()
     val worldInfoPreview by viewModel.worldInfoPreview.collectAsStateWithLifecycle()
+    val requestSettings by viewModel.requestSettings.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -188,6 +191,47 @@ fun GlobalPresetSettingsScreen(
                     }
                 }
                 item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("套用预设的采样参数", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                requestSettings.samplingSummary(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = requestSettings.applySampling,
+                            onCheckedChange = viewModel::setApplySampling
+                        )
+                    }
+                }
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("按长度裁剪历史", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "约 " + TavernContextBudget.budgetChars(
+                                    requestSettings.maxContextTokens,
+                                    requestSettings.historyBudgetChars
+                                ) + " 字符；关掉就只按条数（20 条）切。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = requestSettings.trimHistory,
+                            onCheckedChange = viewModel::setTrimHistory
+                        )
+                    }
+                }
+                item {
                     DashedAddRow(
                         label = "导入世界书（JSON）",
                         onClick = {
@@ -243,6 +287,23 @@ fun GlobalPresetSettingsScreen(
             onConfirm = viewModel::confirmWorldInfoImport
         )
     }
+}
+
+/** 预设采样参数的一行摘要；没有可应用的值时明说，避免用户以为开关坏了。 */
+internal fun TavernRequestSettings.samplingSummary(): String {
+    if (!hasSampling) return "这份预设没有采样参数"
+    return listOfNotNull(
+        temperature?.let { "温度 " + it },
+        topP?.let { "top_p " + it },
+        topK?.let { "top_k " + it },
+        minP?.let { "min_p " + it },
+        frequencyPenalty?.let { "频率惩罚 " + it },
+        presencePenalty?.let { "存在惩罚 " + it },
+        repetitionPenalty?.let { "重复惩罚 " + it },
+        maxTokens?.let { "max_tokens " + it },
+        seed?.let { "种子 " + it },
+        reasoningEffort?.let { "思考档位 " + it }
+    ).joinToString(" · ")
 }
 
 /** 世界书导入确认：说清楚"几条会按关键词触发、几条常驻、几条被跳过"。 */

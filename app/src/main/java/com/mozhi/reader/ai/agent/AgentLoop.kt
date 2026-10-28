@@ -9,6 +9,7 @@ import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatOptions
 import com.mozhi.reader.ai.client.ChatPart
 import com.mozhi.reader.ai.client.ChatRole
+import com.mozhi.reader.ai.prompt.TavernContextBudget
 import com.mozhi.reader.ai.client.ToolCall
 import com.mozhi.reader.ai.client.ToolSpec
 import com.mozhi.reader.ai.memory.RollingSummarizer
@@ -81,6 +82,7 @@ class AgentLoop @Inject constructor(
     private val clientFactory: dagger.Lazy<AiClientFactory>,
     private val attachmentStore: dagger.Lazy<AttachmentStore>,
     private val rollingSummarizer: dagger.Lazy<RollingSummarizer>,
+    private val requestSettingsStore: com.mozhi.reader.core.datastore.TavernRequestSettingsStore,
     private val toolExecutor: AgentToolExecutor = AgentToolExecutor()
 ) {
     private val toolRunner = ParallelToolRunner()
@@ -397,16 +399,20 @@ class AgentLoop @Inject constructor(
     }
 
     /**
-     * §4.5 的对话窗口：只带最近约 [WINDOW_MESSAGES] 条进请求。
-     * 窗口起点必须落在 user 消息上——从中间切开会产生没有对应调用的 tool 结果，
-     * 各方言都会拒绝。找不到合适起点时宁可整段带上。
+     * §4.5 的对话窗口：条数与**长度**双约束（见 [TavernContextBudget]）。
+     *
+     * 只按条数切在长对话里不够用：20 条里只要有几条长正文或工具结果，一次请求就可能几万字符。
+     * 长度预算来自预设请求参数（用户可关），起点必须落在 user 消息上——从中间切开会产生
+     * 没有对应调用的 tool 结果，各方言都会拒绝。找不到合适起点时宁可整段带上。
      */
-    private fun windowStart(rest: List<ChatMessage>): Int {
-        if (rest.size <= WINDOW_MESSAGES) return 0
-        val desired = rest.size - WINDOW_MESSAGES
-        for (i in desired downTo 0) if (rest[i].role == ChatRole.USER) return i
-        for (i in desired + 1 until rest.size) if (rest[i].role == ChatRole.USER) return i
-        return 0
+    private suspend fun windowStart(rest: List<ChatMessage>): Int {
+        val settings = runCatching { requestSettingsStore.current() }.getOrNull()
+        val budget = if (settings == null || !settings.trimHistory) {
+            0
+        } else {
+            TavernContextBudget.budgetChars(settings.maxContextTokens, settings.historyBudgetChars)
+        }
+        return TavernContextBudget.windowStart(rest, WINDOW_MESSAGES, budget)
     }
 
     private fun toChatMessage(entity: MessageEntity, compactWidgets: Boolean = false): ChatMessage = ChatMessage(

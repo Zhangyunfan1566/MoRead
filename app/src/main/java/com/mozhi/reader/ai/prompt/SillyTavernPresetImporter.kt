@@ -4,6 +4,7 @@ import com.mozhi.reader.core.datastore.GlobalPromptInjectionPosition
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
 import com.mozhi.reader.core.datastore.PromptRole
+import com.mozhi.reader.core.datastore.TavernRequestSettings
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -11,7 +12,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 
 /**
  * 导入 SillyTavern（酒馆）的「Chat Completion 预设」JSON，转成本应用可用的全局预设。
@@ -78,7 +81,12 @@ object SillyTavernPresetImporter {
          */
         val regexScripts: List<TavernRegexScript> = emptyList(),
         /** 因为 Java 正则不支持而跑不起来的脚本（只提示，不丢条目）。 */
-        val unsupportedRegex: List<Skipped> = emptyList()
+        val unsupportedRegex: List<Skipped> = emptyList(),
+        /**
+         * 预设**顶层**的请求参数（采样 / 上下文）。
+         * 只解析不启用——`applySampling` 一律为 false，必须由用户在设置页显式打开。
+         */
+        val sampling: TavernRequestSettings = TavernRequestSettings()
     ) {
         val isEmpty: Boolean get() = presets.isEmpty() && markers.isEmpty() && regexScripts.isEmpty()
     }
@@ -193,9 +201,30 @@ object SillyTavernPresetImporter {
             splitNames = splitNames,
             unsupportedMacros = macros.toList(),
             regexScripts = regex.first,
-            unsupportedRegex = regex.second
+            unsupportedRegex = regex.second,
+            sampling = readSampling(root)
         )
     }
+
+    /**
+     * 顶层采样参数。**中性的值一律不搬**：`top_k = 0` / `min_p = 0` 在酒馆里表示"这个采样器关掉"，
+     * 直接发出去反而有供应商会拒；`seed = -1` 表示随机，也不是一个能发出去的种子。
+     * 其余原样保留（是否真的应用由用户开关决定）。
+     */
+    private fun readSampling(root: JsonObject): TavernRequestSettings = TavernRequestSettings(
+        applySampling = false,
+        temperature = root.float("temperature"),
+        topP = root.float("top_p"),
+        topK = root.int("top_k")?.takeIf { it > 0 },
+        minP = root.float("min_p")?.takeIf { it > 0f },
+        frequencyPenalty = root.float("frequency_penalty"),
+        presencePenalty = root.float("presence_penalty"),
+        repetitionPenalty = root.float("repetition_penalty"),
+        maxTokens = root.int("openai_max_tokens")?.takeIf { it > 0 },
+        seed = root.long("seed")?.takeIf { it >= 0 },
+        reasoningEffort = root.str("reasoning_effort").ifBlank { null },
+        maxContextTokens = root.int("openai_max_context")?.takeIf { it > 0 }
+    )
 
     /**
      * 解析 `extensions.regex_scripts`。字段名与酒馆一致。
@@ -316,6 +345,12 @@ object SillyTavernPresetImporter {
 
     private fun JsonObject.intList(key: String): List<Int> =
         (this[key] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.intOrNull }
+
+    private fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.intOrNull
+
+    private fun JsonObject.float(key: String): Float? = (this[key] as? JsonPrimitive)?.floatOrNull
+
+    private fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.longOrNull
 
     private val JsonElement.jsonPrimitive: JsonPrimitive? get() = this as? JsonPrimitive
 }

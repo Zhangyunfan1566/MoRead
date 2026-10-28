@@ -15,6 +15,8 @@ import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
 import com.mozhi.reader.core.datastore.TavernRegexStore
+import com.mozhi.reader.core.datastore.TavernRequestSettings
+import com.mozhi.reader.core.datastore.TavernRequestSettingsStore
 import com.mozhi.reader.core.datastore.TavernVariableStore
 import com.mozhi.reader.core.datastore.TavernWorldInfoStore
 import com.mozhi.reader.core.datastore.UserMaskStore
@@ -63,6 +65,7 @@ class AiClientFactory @Inject constructor(
     private val tavernVariableStore: TavernVariableStore,
     private val tavernRegexStore: TavernRegexStore,
     private val tavernWorldInfoStore: TavernWorldInfoStore,
+    private val tavernRequestSettingsStore: TavernRequestSettingsStore,
     private val userMaskStore: UserMaskStore,
     private val settingsRepository: ReaderSettingsRepository,
     private val personaDao: PersonaDao
@@ -73,11 +76,18 @@ class AiClientFactory @Inject constructor(
         val resolved = forModel(provider, model)
         // 只有 CHAT 角色吃用户的全局预设。IMAGE_PROMPT 刻意不走这里——生图请求有自己的消息序。
         if (role != ModelRole.CHAT) return resolved
+        // 预设顶层的采样参数：**只有用户显式打开开关才生效**（导入一份预设就悄悄改行为最难察觉）。
+        val request = tavernRequestSettingsStore.current()
+        val tuned = if (request.applySampling && request.hasSampling) {
+            resolved.copy(options = resolved.options.mergedWith(request))
+        } else {
+            resolved
+        }
         val presets = globalPromptPresetStore.current().filter { it.enabled }
-        if (presets.isEmpty()) return resolved
-        return resolved.copy(
+        if (presets.isEmpty()) return tuned
+        return tuned.copy(
             client = GlobalPresetChatApiClient(
-                delegate = resolved.client,
+                delegate = tuned.client,
                 presets = presets,
                 variableStore = tavernVariableStore,
                 regexStore = tavernRegexStore,
@@ -86,6 +96,27 @@ class AiClientFactory @Inject constructor(
             )
         )
     }
+
+    /**
+     * 预设值**覆盖** provider `extraJson` 里的同名项——预设就是"这套请求参数"的声明，
+     * 而它已经在一个显式开关后面了。
+     *
+     * [TavernRequestSettings.reasoningEffort] 只认本应用支持的档位：
+     * 实测那份预设写的是 `max`，而 OpenAI 官方只认 low/medium/high，硬发过去会被 400，
+     * 所以认不出来就保持原样、不动。
+     */
+    private fun ChatOptions.mergedWith(request: TavernRequestSettings): ChatOptions = copy(
+        temperature = request.temperature ?: temperature,
+        topP = request.topP ?: topP,
+        topK = request.topK ?: topK,
+        minP = request.minP ?: minP,
+        frequencyPenalty = request.frequencyPenalty ?: frequencyPenalty,
+        presencePenalty = request.presencePenalty ?: presencePenalty,
+        repetitionPenalty = request.repetitionPenalty ?: repetitionPenalty,
+        maxTokens = request.maxTokens ?: maxTokens,
+        seed = request.seed ?: seed,
+        reasoning = request.reasoningEffort?.let { ReasoningEffort.fromWire(it) } ?: reasoning
+    )
 
     /**
      * 酒馆身份宏的来源：`{{char}}` 取当前角色卡名字，`{{user}}` 取用户面具名字，

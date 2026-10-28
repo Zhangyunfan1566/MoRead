@@ -7,6 +7,8 @@ import com.mozhi.reader.core.datastore.GlobalPromptPreset
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
 import com.mozhi.reader.ai.prompt.TavernWorldInfoImporter
 import com.mozhi.reader.core.datastore.TavernRegexStore
+import com.mozhi.reader.core.datastore.TavernRequestSettings
+import com.mozhi.reader.core.datastore.TavernRequestSettingsStore
 import com.mozhi.reader.core.datastore.TavernWorldInfo
 import com.mozhi.reader.core.datastore.TavernWorldInfoStore
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,8 +30,15 @@ sealed interface GlobalPresetEvent {
 class GlobalPresetSettingsViewModel @Inject constructor(
     private val store: GlobalPromptPresetStore,
     private val regexStore: TavernRegexStore,
-    private val worldInfoStore: TavernWorldInfoStore
+    private val worldInfoStore: TavernWorldInfoStore,
+    private val requestSettingsStore: TavernRequestSettingsStore
 ) : ViewModel() {
+
+    val requestSettings = requestSettingsStore.settings.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        TavernRequestSettings()
+    )
 
     val worldInfo = worldInfoStore.worldInfo.stateIn(
         viewModelScope,
@@ -101,6 +110,17 @@ class GlobalPresetSettingsViewModel @Inject constructor(
                 if (result.regexScripts.isNotEmpty()) {
                     regexStore.replaceAll(result.regexScripts.map { it.copy(enabled = enabled && it.enabled) })
                 }
+                // 采样参数只刷新**值**，绝不碰用户的两个开关——开关是用户的，值来自预设。
+                if (result.sampling.hasSampling || result.sampling.maxContextTokens != null) {
+                    val currentRequest = requestSettingsStore.current()
+                    requestSettingsStore.save(
+                        result.sampling.copy(
+                            applySampling = currentRequest.applySampling,
+                            trimHistory = currentRequest.trimHistory,
+                            historyBudgetChars = currentRequest.historyBudgetChars
+                        )
+                    )
+                }
             }.onSuccess {
                 _importPreview.value = null
                 val markerTail = if (result.markers.isEmpty()) "" else "，另存 ${result.markers.size} 条标记条目（不注入）"
@@ -155,6 +175,14 @@ class GlobalPresetSettingsViewModel @Inject constructor(
                 eventChannel.send(GlobalPresetEvent.Message(error.message ?: "写入失败"))
             }
         }
+    }
+
+    fun setApplySampling(enabled: Boolean) {
+        viewModelScope.launch { requestSettingsStore.setApplySampling(enabled) }
+    }
+
+    fun setTrimHistory(enabled: Boolean) {
+        viewModelScope.launch { requestSettingsStore.setTrimHistory(enabled) }
     }
 
     fun setWorldInfoEnabled(enabled: Boolean) {
