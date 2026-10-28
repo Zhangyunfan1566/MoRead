@@ -326,7 +326,7 @@ class AgentLoop @Inject constructor(
         byName: Map<String, AgentTool>,
         deduper: ToolCallDeduper
     ): List<ToolResult> {
-        val plan = deduper.plan(calls)
+        val plan = deduper.plan(calls) { name -> name in ConcurrencySafeTools.NAMES }
 
         // 复用的调用也播一次"完成"，界面上看得出这条没有真跑。
         plan.reused.forEach { (index, result) ->
@@ -356,6 +356,8 @@ class AgentLoop @Inject constructor(
             byIndex[original] = freshResults[index]
             deduper.remember(call, freshResults[index])
         }
+        // 这一轮动过写入类工具 → 缓存的读取结果全部作废，下一轮再读要重新查。
+        if (plan.fresh.any { (_, call) -> call.name !in ConcurrencySafeTools.NAMES }) deduper.invalidate()
         // 本轮内的重复：结果就是它重复的那条的结果。
         plan.duplicateOf.forEach { (index, first) ->
             val source = byIndex[first]

@@ -199,7 +199,9 @@ class SillyTavernPresetImporterTest {
 
     @Test
     fun `超长内容按上限切分而不是丢弃`() {
-        val long = "第一段内容。".repeat(2000)
+        // 6 字符 × 2100 = 12600，**必须严格超过 MAX_PROMPT_CHARS(12000)**：
+        // 原来写 repeat(2000) 正好 12000，落进 `length <= max` 的不切分支，断言必然失败。
+        val long = "第一段内容。".repeat(2100)
         val result = SillyTavernPresetImporter.import(
             """{"name":"长预设","prompts":[{"identifier":"long","name":"超长串","role":"system","content":"$long","injection_position":0,"injection_depth":3,"enabled":true}]}"""
         )

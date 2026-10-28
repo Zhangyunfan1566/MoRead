@@ -7,7 +7,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 工具调用去重。要钉住三种情况：跨轮复用、同轮重复、参数规范化（键序不同的同一份参数算同一次调用）。
+ * 工具调用去重。
+ *
+ * 三条边界是这轮审查揪出来的，必须钉住：
+ * 1. **只有只读工具参与去重**——写入类工具的结果依赖当时的书库状态，缓存它会让"先读、再改、再读"拿到旧内容；
+ * 2. **写入是屏障**——同轮里写入之后，之前缓存的读取结果一律作废；
+ * 3. **失败不缓存**——失败往往是暂时的，模型重试同一次调用是合法的，不该被短路。
  */
 class ToolCallDeduperTest {
 
@@ -15,6 +20,12 @@ class ToolCallDeduperTest {
         ToolCall(id = id, name = name, arguments = arguments)
 
     private fun success(text: String = "结果") = ToolResult.Success(text)
+    private fun failure() = ToolResult.Failure("SOURCE_MISSING", "没有这本书")
+
+    /** 只读名单用真实那份的一部分；写入类（add_annotation / generate_image…）不在里面。 */
+    private val readOnly: (String) -> Boolean = { it in ConcurrencySafeTools.NAMES }
+
+    private fun ToolCallDeduper.planReadOnly(calls: List<ToolCall>) = plan(calls, readOnly)
 
     // ---------- ① 无重复 ----------
 
@@ -25,7 +36,7 @@ class ToolCallDeduperTest {
             call(arguments = """{"query":"森林"}""", id = "1"),
             call(arguments = """{"query":"沙漠"}""", id = "2")
         )
-        val plan = deduper.plan(calls)
+        val plan = deduper.planReadOnly(calls)
         assertEquals(listOf(0 to calls[0], 1 to calls[1]), plan.fresh)
         assertTrue(plan.reused.isEmpty())
         assertTrue(plan.duplicateOf.isEmpty())
@@ -34,55 +45,54 @@ class ToolCallDeduperTest {
     @Test
     fun `工具名不同即使参数一样也不算重复`() {
         val deduper = ToolCallDeduper()
-        val plan = deduper.plan(listOf(call(name = "a"), call(name = "b")))
+        val plan = deduper.planReadOnly(listOf(call(name = "search_book"), call(name = "grep_book")))
         assertEquals(2, plan.fresh.size)
     }
 
     // ---------- ② 跨轮复用 ----------
 
     @Test
-    fun `上一轮跑过的相同调用直接复用`() {
+    fun `上一轮跑过的相同只读调用直接复用`() {
         val deduper = ToolCallDeduper()
         val first = call(id = "1")
-        deduper.plan(listOf(first))
+        deduper.planReadOnly(listOf(first))
         deduper.remember(first, success("上次的结果"))
 
-        val second = call(id = "2")
-        val plan = deduper.plan(listOf(second))
+        val plan = deduper.planReadOnly(listOf(call(id = "2")))
         assertTrue(plan.fresh.isEmpty())
         assertEquals("上次的结果", plan.reused[0]?.content)
     }
 
     @Test
-    fun `失败结果也会被记住（重复问同一个失败调用没有意义）`() {
+    fun `失败结果不会被记住（重试是合法的）`() {
         val deduper = ToolCallDeduper()
         val first = call(id = "1")
-        deduper.plan(listOf(first))
-        deduper.remember(first, ToolResult.Failure("SOURCE_MISSING", "没有这本书"))
+        deduper.planReadOnly(listOf(first))
+        deduper.remember(first, failure())
 
-        val plan = deduper.plan(listOf(call(id = "2")))
-        assertTrue(plan.fresh.isEmpty())
-        assertTrue(plan.reused.containsKey(0))
+        val plan = deduper.planReadOnly(listOf(call(id = "2")))
+        assertEquals(1, plan.fresh.size)
+        assertTrue(plan.reused.isEmpty())
     }
 
     @Test
     fun `参数变了就不再复用`() {
         val deduper = ToolCallDeduper()
         val first = call(arguments = """{"query":"森林"}""")
-        deduper.plan(listOf(first))
+        deduper.planReadOnly(listOf(first))
         deduper.remember(first, success())
 
-        val plan = deduper.plan(listOf(call(arguments = """{"query":"森林 "}""")))
+        val plan = deduper.planReadOnly(listOf(call(arguments = """{"query":"森林 "}""")))
         assertEquals(1, plan.fresh.size)
     }
 
     // ---------- ③ 同一轮内重复 ----------
 
     @Test
-    fun `同一轮里两条一样的调用只跑第一条`() {
+    fun `同一轮里两条一样的只读调用只跑第一条`() {
         val deduper = ToolCallDeduper()
         val calls = listOf(call(id = "1"), call(id = "2"))
-        val plan = deduper.plan(calls)
+        val plan = deduper.planReadOnly(calls)
         assertEquals(listOf(0 to calls[0]), plan.fresh)
         assertEquals(0, plan.duplicateOf[1])
         assertTrue(plan.reused.isEmpty())
@@ -91,7 +101,7 @@ class ToolCallDeduperTest {
     @Test
     fun `同一轮里的三条重复都指向第一条`() {
         val deduper = ToolCallDeduper()
-        val plan = deduper.plan(listOf(call(id = "1"), call(id = "2"), call(id = "3")))
+        val plan = deduper.planReadOnly(listOf(call(id = "1"), call(id = "2"), call(id = "3")))
         assertEquals(1, plan.fresh.size)
         assertEquals(0, plan.duplicateOf[1])
         assertEquals(0, plan.duplicateOf[2])
@@ -101,16 +111,72 @@ class ToolCallDeduperTest {
     fun `同轮重复优先于跨轮复用（先看缓存）`() {
         val deduper = ToolCallDeduper()
         val cached = call(id = "old")
-        deduper.plan(listOf(cached))
+        deduper.planReadOnly(listOf(cached))
         deduper.remember(cached, success("缓存"))
 
-        val plan = deduper.plan(listOf(call(id = "1"), call(id = "2")))
+        val plan = deduper.planReadOnly(listOf(call(id = "1"), call(id = "2")))
         assertTrue(plan.fresh.isEmpty())
         assertEquals("缓存", plan.reused[0]?.content)
         assertEquals("缓存", plan.reused[1]?.content)
     }
 
-    // ---------- ④ 参数规范化 ----------
+    // ---------- ④ 只读限定与写入屏障 ----------
+
+    @Test
+    fun `写入类工具从不参与去重`() {
+        val deduper = ToolCallDeduper()
+        val calls = listOf(
+            call(name = "add_annotation", id = "1"),
+            call(name = "add_annotation", id = "2")
+        )
+        val plan = deduper.planReadOnly(calls)
+        assertEquals(2, plan.fresh.size)
+        assertTrue(plan.reused.isEmpty())
+        assertTrue(plan.duplicateOf.isEmpty())
+    }
+
+    @Test
+    fun `写入是屏障：同轮里写入之后的读取要重新查`() {
+        val deduper = ToolCallDeduper()
+        val read = call(name = "read_book_section", arguments = """{"chapter":3}""", id = "r1")
+        val write = call(name = "add_annotation", arguments = """{"text":"x"}""", id = "w")
+        val readAgain = call(name = "read_book_section", arguments = """{"chapter":3}""", id = "r2")
+
+        val plan = deduper.planReadOnly(listOf(read, write, readAgain))
+        // 三条都要真跑：第二条读取不能被第一条的缓存短路
+        assertEquals(3, plan.fresh.size)
+        assertTrue(plan.reused.isEmpty())
+        assertTrue(plan.duplicateOf.isEmpty())
+    }
+
+    @Test
+    fun `写入之后同轮里再读同一条不会被当成重复`() {
+        val deduper = ToolCallDeduper()
+        val write = call(name = "generate_image", arguments = """{"prompt":"a"}""", id = "w")
+        val read = call(name = "list_annotations", arguments = """{}""", id = "r1")
+        val readAgain = call(name = "list_annotations", arguments = """{}""", id = "r2")
+
+        val plan = deduper.planReadOnly(listOf(write, read, readAgain))
+        // 写入清空了 firstIndexForKey，所以第二条读取是新的一次，不是 duplicateOf
+        assertEquals(3, plan.fresh.size)
+        assertTrue(plan.duplicateOf.isEmpty())
+    }
+
+    @Test
+    fun `invalidate 之后上一轮的读取缓存作废`() {
+        val deduper = ToolCallDeduper()
+        val read = call(id = "1")
+        deduper.planReadOnly(listOf(read))
+        deduper.remember(read, success("旧内容"))
+
+        deduper.invalidate()
+
+        val plan = deduper.planReadOnly(listOf(call(id = "2")))
+        assertEquals(1, plan.fresh.size)
+        assertTrue(plan.reused.isEmpty())
+    }
+
+    // ---------- ⑤ 参数规范化 ----------
 
     @Test
     fun `键序不同的同一份参数算同一次调用`() {

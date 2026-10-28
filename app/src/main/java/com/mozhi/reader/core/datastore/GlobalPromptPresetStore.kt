@@ -80,7 +80,9 @@ class GlobalPromptPresetStore @Inject constructor(
             prompt = preset.prompt.trim().take(MAX_PROMPT_CHARS)
         )
         require(clean.name.isNotBlank()) { "预设名称不能为空" }
-        require(clean.prompt.isNotBlank()) { "提示词不能为空" }
+        // marker 是酒馆预设里的**占位条目**（worldInfoBefore / chatHistory…），正文本来就是空的，
+        // 而且它永远不参与注入——对它套"提示词不能为空"会让导入任何真实预设都失败。
+        require(clean.prompt.isNotBlank() || clean.marker) { "提示词不能为空" }
         dataStore.edit { preferences ->
             val existing = decode(preferences[KEY]) ?: DEFAULTS
             preferences[KEY] = encode(existing.filterNot { it.id == clean.id } + clean)

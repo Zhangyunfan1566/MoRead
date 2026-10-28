@@ -67,6 +67,27 @@ import kotlinx.coroutines.launch
 /** 导入文件大小上限：酒馆预设是纯文本，正常几十 KB；超过这个量级基本是拿错文件了。 */
 private const val MAX_TAVERN_PRESET_BYTES = 8 * 1024 * 1024
 
+/**
+ * 按上限读取导入文件。
+ *
+ * **不能直接 `readBytes()`**：那是先把整个文件读进内存、再去比大小，而 picker 的 mime 里带了
+ * `"*/*"`，用户选到一个几百 MB 的文件就会在判断之前 OOM。这里最多读到上限 +1 字节，
+ * 读满即停，超没超由调用方按长度判。
+ */
+private fun readCapped(context: android.content.Context, uri: android.net.Uri, limit: Int): ByteArray {
+    val stream = context.contentResolver.openInputStream(uri) ?: error("读不到这个文件")
+    return stream.use { input ->
+        val buffer = ByteArray(limit + 1)
+        var read = 0
+        while (read < buffer.size) {
+            val count = input.read(buffer, read, buffer.size - read)
+            if (count <= 0) break
+            read += count
+        }
+        buffer.copyOf(read)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GlobalPresetSettingsScreen(
@@ -90,8 +111,7 @@ fun GlobalPresetSettingsScreen(
     val tavernImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: error("读不到这个文件")
+                val bytes = readCapped(context, uri, MAX_TAVERN_PRESET_BYTES)
                 if (bytes.size > MAX_TAVERN_PRESET_BYTES) {
                     error("文件超过 ${MAX_TAVERN_PRESET_BYTES / 1024 / 1024}MB，不像是酒馆预设 JSON")
                 }
@@ -107,8 +127,7 @@ fun GlobalPresetSettingsScreen(
     val worldInfoImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: error("读不到这个文件")
+                val bytes = readCapped(context, uri, MAX_TAVERN_PRESET_BYTES)
                 if (bytes.size > MAX_TAVERN_PRESET_BYTES) {
                     error("文件超过 ${MAX_TAVERN_PRESET_BYTES / 1024 / 1024}MB，不像是世界书 JSON")
                 }

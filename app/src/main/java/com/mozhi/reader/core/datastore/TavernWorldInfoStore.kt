@@ -42,13 +42,6 @@ class TavernWorldInfoStore @Inject constructor(
 
     suspend fun current(): TavernWorldInfo = worldInfo.first()
 
-    /** 引擎要的形态：总开关关掉、或条目自身关掉，都不注入。 */
-    suspend fun activeEntries(): List<WorldInfoEntry> {
-        val current = current()
-        if (!current.enabled) return emptyList()
-        return current.entries.filter { it.enabled && !it.disabled }
-    }
-
     suspend fun save(value: TavernWorldInfo) {
         val clean = value.copy(
             sourceName = value.sourceName.take(200),
@@ -76,12 +69,6 @@ class TavernWorldInfoStore @Inject constructor(
     }
 
     suspend fun setEnabled(enabled: Boolean) = save(current().copy(enabled = enabled))
-
-    suspend fun setEntryEnabled(id: String, enabled: Boolean) {
-        val current = current()
-        if (current.entries.none { it.id == id }) return
-        save(current.copy(entries = current.entries.map { if (it.id == id) it.copy(enabled = enabled) else it }))
-    }
 
     suspend fun clear() = save(TavernWorldInfo())
 

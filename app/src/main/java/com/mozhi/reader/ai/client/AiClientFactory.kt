@@ -84,7 +84,15 @@ class AiClientFactory @Inject constructor(
             resolved
         }
         val presets = globalPromptPresetStore.current().filter { it.enabled }
-        if (presets.isEmpty()) return tuned
+        // 装饰器不只在"有启用的预设条目"时才需要：正则脚本与世界书各有独立开关，
+        // 只导入世界书/正则而不启用任何预设条目时，它们也必须跑起来。
+        val hasRegex = tavernRegexStore.current().any { it.enabled }
+        val worldInfo = tavernWorldInfoStore.current()
+        val hasWorldInfo = worldInfo.enabled && worldInfo.entries.isNotEmpty()
+        if (presets.isEmpty() && !hasRegex && !hasWorldInfo) return tuned
+        // 身份宏要读设置与角色卡（都是 suspend），在这里取好再捕获——
+        // 装饰器的 macroContext 是普通 lambda，不能直接调 suspend 函数。
+        val macros = tavernMacroContext()
         return tuned.copy(
             client = GlobalPresetChatApiClient(
                 delegate = tuned.client,
@@ -92,7 +100,7 @@ class AiClientFactory @Inject constructor(
                 variableStore = tavernVariableStore,
                 regexStore = tavernRegexStore,
                 worldInfoStore = tavernWorldInfoStore,
-                macroContext = { tavernMacroContext() }
+                macroContext = { macros }
             )
         )
     }

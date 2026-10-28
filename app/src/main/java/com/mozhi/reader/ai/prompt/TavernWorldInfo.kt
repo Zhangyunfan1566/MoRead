@@ -142,10 +142,6 @@ object WorldInfoEngine {
         entries.forEach { entry ->
             if (entry.disabled || !entry.enabled) return@forEach
             if (entry.content.isBlank()) return@forEach
-            if (entry.position == WorldInfoEntry.POSITION_OUTLET) {
-                ignoredPositions += entry.position
-                return@forEach
-            }
             val haystack = scanText(entry, recentMessages, options)
             val activation = matchEntry(entry, haystack, options) ?: return@forEach
             if (!passesProbability(entry, random)) return@forEach
@@ -161,8 +157,14 @@ object WorldInfoEngine {
         var used = 0
         var stopped = false
         ordered.forEach { activation ->
-            if (stopped) return@forEach
             val entry = activation.entry
+            // outlet 位置本应用没有对应锚点：**命中了才提示**（原来在匹配之前就记，
+            // 没命中的 outlet 条目也会让界面多一句无意义的话）。
+            if (entry.position == WorldInfoEntry.POSITION_OUTLET) {
+                ignoredPositions += entry.position
+                return@forEach
+            }
+            if (stopped) return@forEach
             if (used + entry.content.length > options.maxChars) {
                 stopped = true
                 return@forEach

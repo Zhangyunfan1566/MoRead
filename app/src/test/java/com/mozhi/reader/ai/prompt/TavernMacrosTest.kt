@@ -170,6 +170,38 @@ class TavernMacrosTest {
         assertEquals("Ab", render(text, null, variables))
     }
 
+    // ---------- ⑥b 空白容错（审查揪出的静默丢内容） ----------
+
+    @Test
+    fun `带空格的 else 与不带空格等价`() {
+        // 曾经：按字面量 startsWith("{{else") 判分支，`{{ else }}` 被当成"没有 else"，
+        // else 之后的内容（含 {{/if}}）整段静默丢失。
+        val variables = scope("f" to "1")
+        assertEquals("A", render("{{#if f}}A{{ else }}B{{/if}}", null, variables))
+        variables.set("f", "0")
+        assertEquals("B", render("{{#if f}}A{{ else }}B{{/if}}", null, variables))
+        assertEquals("B", render("{{#if f}}A{{  else  }}B{{/if}}", null, variables))
+    }
+
+    @Test
+    fun `带空格 else 之后的尾部正文不丢`() {
+        val variables = scope("f" to "0")
+        assertEquals("B尾巴", render("{{#if f}}A{{ else }}B{{/if}}尾巴", null, variables))
+    }
+
+    @Test
+    fun `闭合标签带空格也能识别`() {
+        val variables = scope("f" to "1")
+        assertEquals("A", render("{{#if f}}A{{ /if }}", null, variables))
+        assertEquals("A尾巴", render("{{#if f}}A{{/if}}尾巴", null, variables))
+    }
+
+    @Test
+    fun `畸形嵌套（缺闭合）不吞掉后面的内容`() {
+        val variables = scope("f" to "0")
+        assertEquals("B", render("{{#if f}}A{{ else }}B", null, variables))
+    }
+
     @Test
     fun `没有作用域时条件块原样保留`() {
         val text = "{{#if flag}}A{{else}}B{{/if}}"

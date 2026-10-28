@@ -155,7 +155,11 @@ object TavernMacros {
                     val condition = body.removePrefix("#if").trim()
                     val (thenNodes, afterThen) = parse(text, index)
                     val marker = markerAt(text, afterThen)
-                    if (marker.startsWith("{{else")) {
+                    // 用归一化后的宏名判定：`{{ else }}`（带空格）必须与 `{{else}}` 等价。
+                    // 原先按字面量 `startsWith("{{else")` 判，带空格会被当成"没有 else 分支"，
+                    // 于是 skipCloseIf 不前进、外层循环在 else 处 return，
+                    // **else 之后的内容（含 {{/if}}）整段静默丢失**。
+                    if (markerName(marker) == "else") {
                         val (elseNodes, afterElse) = parse(text, afterThen + marker.length)
                         nodes += Conditional(condition, thenNodes, elseNodes)
                         index = skipCloseIf(text, afterElse)
@@ -164,7 +168,7 @@ object TavernMacros {
                         index = skipCloseIf(text, afterThen)
                     }
                 }
-                body.startsWith("else") || body.startsWith("/if") -> return nodes to open
+                macroName(body) == "else" || body.startsWith("/if") -> return nodes to open
                 else -> nodes += Literal(text.substring(open, close + 2))
             }
         }
@@ -178,11 +182,19 @@ object TavernMacros {
         return if (close < 0) "" else text.substring(index, close + 2)
     }
 
+    /**
+     * 跳过 `{{/if}}`。**只认闭合标签**——按宏名判会连 `{{#if}}`（开标签）一起吞掉，
+     * 遇到没有闭合的畸形嵌套时会多吃一段。
+     */
     private fun skipCloseIf(text: String, index: Int): Int {
         val marker = markerAt(text, index)
-        return if (marker.isNotEmpty() && macroName(marker.substring(2, marker.length - 2)) == "if") index + marker.length
-        else index
+        if (marker.isEmpty()) return index
+        return if (marker.substring(2, marker.length - 2).trim().startsWith("/if")) index + marker.length else index
     }
+
+    /** 取 `{{…}}` 整条里的宏名（已归一化）；不是宏就返回空串。 */
+    private fun markerName(marker: String): String =
+        if (marker.length < 4 || !marker.startsWith("{{")) "" else macroName(marker.substring(2, marker.length - 2))
 
     private fun renderNodes(nodes: List<Node>, context: MacroContext?, variables: TavernVariables): String =
         buildString {

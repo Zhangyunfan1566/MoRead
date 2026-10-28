@@ -231,7 +231,8 @@ class ImageConsistencyRepository @Inject constructor(
         }
 
         val image = planned?.images?.firstOrNull()
-        if (image != null) {
+        // 同时判 planned：只判 image 不会让编译器把 planned 智能转换成非空。
+        if (planned != null && image != null) {
             // 档案变更（建档 / 永久变化）落库；失败不影响本次出图。
             planned.changes.forEach { change ->
                 runCatching { applyLibraryChange(bookId, book, change, book.chapterIndex) }

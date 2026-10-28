@@ -36,12 +36,25 @@ internal class ToolCallDeduper {
         val duplicateOf: Map<Int, Int>
     )
 
-    fun plan(calls: List<ToolCall>): Plan {
+    /**
+     * @param readOnly 该工具名是不是只读的。**只有只读调用参与去重**：
+     *   写入类工具（加批注、写笔记、生图、整理书库…）的结果依赖当时的书库状态，
+     *   缓存它会让"先读、再改、再读"拿到改动前的旧内容。
+     *   只读名单直接复用并发调度那份 [ConcurrencySafeTools.NAMES]。
+     */
+    fun plan(calls: List<ToolCall>, readOnly: (String) -> Boolean): Plan {
         val fresh = mutableListOf<Pair<Int, ToolCall>>()
         val reused = LinkedHashMap<Int, ToolResult>()
         val duplicateOf = LinkedHashMap<Int, Int>()
         val firstIndexForKey = HashMap<String, Int>()
         calls.forEachIndexed { index, call ->
+            if (!readOnly(call.name)) {
+                // 写入是**屏障**：它之前缓存的读取结果不再可信，同轮里后面再读必须重新查。
+                done.clear()
+                firstIndexForKey.clear()
+                fresh += index to call
+                return@forEachIndexed
+            }
             val key = key(call)
             val cached = done[key]
             if (cached != null) {
@@ -59,9 +72,17 @@ internal class ToolCallDeduper {
         return Plan(fresh, reused, duplicateOf)
     }
 
-    /** 执行完一条就记下来；失败结果也记——同一轮里重复问同一个失败调用同样没有意义。 */
+    /**
+     * 执行完一条就记下来。**只记成功结果**：失败往往是暂时的（网络、限流、暂时读不到），
+     * 模型换个时机重试同一次调用是合法的，不该被去重短路成同一条失败。
+     */
     fun remember(call: ToolCall, result: ToolResult) {
-        done[key(call)] = result
+        if (result is ToolResult.Success) done[key(call)] = result
+    }
+
+    /** 一轮里跑过写入类工具之后调用：此前缓存的读取结果全部作废。 */
+    fun invalidate() {
+        done.clear()
     }
 
     internal fun key(call: ToolCall): String = call.name + '\u0000' + normalize(call.arguments)
