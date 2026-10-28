@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.mozhi.reader.ai.prompt.SillyTavernPresetImporter
 import com.mozhi.reader.core.datastore.GlobalPromptPreset
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
+import com.mozhi.reader.core.datastore.TavernRegexStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
@@ -22,7 +23,8 @@ sealed interface GlobalPresetEvent {
 
 @HiltViewModel
 class GlobalPresetSettingsViewModel @Inject constructor(
-    private val store: GlobalPromptPresetStore
+    private val store: GlobalPromptPresetStore,
+    private val regexStore: TavernRegexStore
 ) : ViewModel() {
     val presets = store.presets.stateIn(
         viewModelScope,
@@ -81,11 +83,18 @@ class GlobalPresetSettingsViewModel @Inject constructor(
                 result.presets.forEach { store.upsert(it.copy(enabled = enabled)) }
                 // marker 条目一并收进列表：可见、可手动改成可注入，但本身不参与注入。
                 result.markers.forEach { store.upsert(it.copy(enabled = false, marker = true)) }
+                // 正则脚本与"这份预设是否启用"同进退：预设关着时脚本也不该偷偷生效。
+                if (result.regexScripts.isNotEmpty()) {
+                    regexStore.replaceAll(result.regexScripts.map { it.copy(enabled = enabled && it.enabled) })
+                }
             }.onSuccess {
                 _importPreview.value = null
                 val markerTail = if (result.markers.isEmpty()) "" else "，另存 ${result.markers.size} 条标记条目（不注入）"
                 val tail = if (result.skipped.isEmpty()) "" else "，跳过 ${result.skipped.size} 条"
-                eventChannel.send(GlobalPresetEvent.Message("已导入 ${result.presets.size} 条预设$markerTail$tail"))
+                val regexTail = if (result.regexScripts.isEmpty()) "" else
+                    "，正则脚本 ${result.regexScripts.count { it.enabled }} 条" +
+                        (if (result.unsupportedRegex.isEmpty()) "" else "（${result.unsupportedRegex.size} 条 Java 正则不支持）")
+                eventChannel.send(GlobalPresetEvent.Message("已导入 ${result.presets.size} 条预设$markerTail$regexTail$tail"))
             }.onFailure { error ->
                 eventChannel.send(GlobalPresetEvent.Message(error.message ?: "写入失败"))
             }

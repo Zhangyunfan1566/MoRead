@@ -14,6 +14,7 @@ import com.mozhi.reader.core.database.entity.AiProviderAdapter
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
 import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.core.datastore.TavernRegexStore
 import com.mozhi.reader.core.datastore.TavernVariableStore
 import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.media.ImageApiProvider
@@ -59,6 +60,7 @@ class AiClientFactory @Inject constructor(
     private val httpClient: OkHttpClient,
     private val globalPromptPresetStore: GlobalPromptPresetStore,
     private val tavernVariableStore: TavernVariableStore,
+    private val tavernRegexStore: TavernRegexStore,
     private val userMaskStore: UserMaskStore,
     private val settingsRepository: ReaderSettingsRepository,
     private val personaDao: PersonaDao
@@ -76,6 +78,7 @@ class AiClientFactory @Inject constructor(
                 delegate = resolved.client,
                 presets = presets,
                 variableStore = tavernVariableStore,
+                regexStore = tavernRegexStore,
                 macroContext = { tavernMacroContext() }
             )
         )

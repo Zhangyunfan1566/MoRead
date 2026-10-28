@@ -71,9 +71,16 @@ object SillyTavernPresetImporter {
         /** 因为超长被拆成多段的条目名（原始名）。 */
         val splitNames: List<String>,
         /** 内容里出现的、本应用**不会执行**的宏名（只提示，不改内容）。 */
-        val unsupportedMacros: List<String>
+        val unsupportedMacros: List<String>,
+        /**
+         * `extensions.regex_scripts` 里的正则脚本。`enabled` 反映**预设自身**的开关
+         * （`disabled == false`）；"这份预设要不要生效"由调用方再与一次。
+         */
+        val regexScripts: List<TavernRegexScript> = emptyList(),
+        /** 因为 Java 正则不支持而跑不起来的脚本（只提示，不丢条目）。 */
+        val unsupportedRegex: List<Skipped> = emptyList()
     ) {
-        val isEmpty: Boolean get() = presets.isEmpty() && markers.isEmpty()
+        val isEmpty: Boolean get() = presets.isEmpty() && markers.isEmpty() && regexScripts.isEmpty()
     }
 
     class ImportException(message: String) : IllegalArgumentException(message)
@@ -173,7 +180,9 @@ object SillyTavernPresetImporter {
             }
         }
 
-        if (presets.isEmpty() && markers.isEmpty()) {
+        val regex = readRegexScripts(root, skipped)
+
+        if (presets.isEmpty() && markers.isEmpty() && regex.first.isEmpty()) {
             throw ImportException("这份预设里没有可导入的条目")
         }
         return Result(
@@ -182,8 +191,51 @@ object SillyTavernPresetImporter {
             skipped = skipped,
             sourceName = root.str("name").ifBlank { null },
             splitNames = splitNames,
-            unsupportedMacros = macros.toList()
+            unsupportedMacros = macros.toList(),
+            regexScripts = regex.first,
+            unsupportedRegex = regex.second
         )
+    }
+
+    /**
+     * 解析 `extensions.regex_scripts`。字段名与酒馆一致。
+     *
+     * **Java 正则编不过的脚本照常保留在结果里**（用户能看到、能改），只是同时列进
+     * [Result.unsupportedRegex] 提示它当前不会生效——绝不静默丢弃。
+     */
+    private fun readRegexScripts(
+        root: JsonObject,
+        skipped: MutableList<Skipped>
+    ): Pair<List<TavernRegexScript>, List<Skipped>> {
+        val extensions = root["extensions"] as? JsonObject ?: return emptyList<TavernRegexScript>() to emptyList()
+        val array = extensions["regex_scripts"] as? JsonArray ?: return emptyList<TavernRegexScript>() to emptyList()
+        val scripts = mutableListOf<TavernRegexScript>()
+        val unsupported = mutableListOf<Skipped>()
+        array.forEachIndexed { index, element ->
+            val entry = element as? JsonObject ?: return@forEachIndexed
+            val find = entry.str("findRegex")
+            val name = entry.str("scriptName").ifBlank { entry.str("name") }
+                .ifBlank { "正则脚本 " + (index + 1) }
+            if (find.isBlank()) {
+                skipped += Skipped(name, "findRegex 为空")
+                return@forEachIndexed
+            }
+            scripts += TavernRegexScript(
+                id = entry.str("id").ifBlank { "tavern-regex-" + index },
+                name = name,
+                find = find,
+                replacement = entry.str("replaceString"),
+                trimStrings = entry.stringList("trimStrings"),
+                placements = entry.intList("placement").ifEmpty { listOf(TavernRegexScript.PLACEMENT_AI_OUTPUT) },
+                enabled = entry.bool("disabled") != true,
+                markdownOnly = entry.bool("markdownOnly") == true,
+                promptOnly = entry.bool("promptOnly") == true,
+                minDepth = entry["minDepth"]?.jsonPrimitive?.intOrNull,
+                maxDepth = entry["maxDepth"]?.jsonPrimitive?.intOrNull
+            )
+            TavernRegexEngine.unsupportedReason(find)?.let { unsupported += Skipped(name, it) }
+        }
+        return scripts to unsupported
     }
 
     /**
@@ -258,6 +310,12 @@ object SillyTavernPresetImporter {
 
     private fun JsonObject.bool(key: String): Boolean? =
         (this[key] as? JsonPrimitive)?.booleanOrNull
+
+    private fun JsonObject.stringList(key: String): List<String> =
+        (this[key] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+
+    private fun JsonObject.intList(key: String): List<Int> =
+        (this[key] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.intOrNull }
 
     private val JsonElement.jsonPrimitive: JsonPrimitive? get() = this as? JsonPrimitive
 }

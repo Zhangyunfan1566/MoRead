@@ -242,6 +242,68 @@ class SillyTavernPresetImporterTest {
         assertTrue(e is SillyTavernPresetImporter.ImportException)
     }
 
+    // ---------- extensions.regex_scripts ----------
+
+    private val presetWithRegex = """
+    {
+      "name": "带正则的预设",
+      "prompts": [{"identifier": "jb", "name": "破限", "role": "system", "content": "放开限制", "injection_position": 0, "injection_depth": 0, "enabled": true}],
+      "extensions": {
+        "regex_scripts": [
+          {"id": "r1", "scriptName": "破折号处理", "findRegex": "/(?<=[\\u4e00-\\u9fa5])——(?=[\\u4e00-\\u9fa5])/g", "replaceString": "，", "placement": [2], "markdownOnly": true, "promptOnly": true, "disabled": false},
+          {"id": "r2", "scriptName": "包裹最新指示", "findRegex": "^([\\s\\S]*)$", "replaceString": "<最新互动>\n$1\n</最新互动>", "placement": [1], "maxDepth": 1, "disabled": false},
+          {"id": "r3", "scriptName": "预设里关掉的", "findRegex": "/x/g", "replaceString": "y", "placement": [2], "disabled": true},
+          {"id": "r4", "scriptName": "编不过的", "findRegex": "([unclosed", "replaceString": "", "placement": [2], "disabled": false}
+        ]
+      }
+    }
+    """.trimIndent()
+
+    @Test
+    fun `正则脚本被解析出来并保留酒馆语义`() {
+        val result = SillyTavernPresetImporter.import(presetWithRegex)
+        assertEquals(4, result.regexScripts.size)
+        val dash = result.regexScripts.first { it.id == "r1" }
+        assertEquals("破折号处理", dash.name)
+        assertEquals("，", dash.replacement)
+        assertEquals(listOf(2), dash.placements)
+        assertTrue(dash.markdownOnly)
+        assertTrue(dash.promptOnly)
+        assertTrue(dash.enabled)
+        val wrap = result.regexScripts.first { it.id == "r2" }
+        assertEquals(listOf(1), wrap.placements)
+        assertEquals(1, wrap.maxDepth)
+        assertTrue(wrap.replacement.contains("<最新互动>"))
+    }
+
+    @Test
+    fun `预设里禁用的脚本导入后也是禁用状态`() {
+        val result = SillyTavernPresetImporter.import(presetWithRegex)
+        assertFalse(result.regexScripts.first { it.id == "r3" }.enabled)
+    }
+
+    @Test
+    fun `Java 编不过的正则被列出来但条目照常保留`() {
+        val result = SillyTavernPresetImporter.import(presetWithRegex)
+        assertEquals(1, result.unsupportedRegex.size)
+        assertEquals("编不过的", result.unsupportedRegex.first().name)
+        // 条目本身没有被丢掉——用户还能看到、还能改
+        assertTrue(result.regexScripts.any { it.id == "r4" })
+    }
+
+    @Test
+    fun `只有正则脚本的预设也能导入`() {
+        val onlyRegex = """
+        {"name":"只有正则","prompts":[],"extensions":{"regex_scripts":[
+          {"scriptName":"清洗","findRegex":"/a/g","replaceString":"b","placement":[2],"disabled":false}
+        ]}}
+        """.trimIndent()
+        val result = SillyTavernPresetImporter.import(onlyRegex)
+        assertTrue(result.presets.isEmpty())
+        assertEquals(1, result.regexScripts.size)
+        assertFalse(result.isEmpty)
+    }
+
     @Test
     fun `导入结果里的 id 稳定且互不重复`() {
         val a = SillyTavernPresetImporter.import(tavernPreset).presets.map { it.id }
