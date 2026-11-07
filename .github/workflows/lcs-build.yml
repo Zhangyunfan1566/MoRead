@@ -6,9 +6,11 @@ on:
   push:
     branches:
       - "lcs/**"
+      - "ci/**"
   pull_request:
     branches:
       - "lcs/**"
+      - "ci/**"
   workflow_dispatch:
 
 permissions:
