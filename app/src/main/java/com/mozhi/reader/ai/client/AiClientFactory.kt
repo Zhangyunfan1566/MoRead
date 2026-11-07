@@ -3,7 +3,9 @@ package com.mozhi.reader.ai.client
 import com.mozhi.reader.ai.provider.AiProviderRepository
 import com.mozhi.reader.ai.provider.ModelProtocolRoute
 import com.mozhi.reader.ai.provider.ProviderProtocolPolicy
+import com.mozhi.reader.ai.prompt.MacroContext
 import com.mozhi.reader.core.database.dao.AiProviderDao
+import com.mozhi.reader.core.database.dao.PersonaDao
 import com.mozhi.reader.core.database.entity.AiProviderEntity
 import com.mozhi.reader.core.database.entity.AiProviderType
 import com.mozhi.reader.core.database.entity.AiModelEntity
@@ -11,6 +13,13 @@ import com.mozhi.reader.core.database.entity.AiModelType
 import com.mozhi.reader.core.database.entity.AiProviderAdapter
 import com.mozhi.reader.core.database.entity.ModelRole
 import com.mozhi.reader.core.datastore.GlobalPromptPresetStore
+import com.mozhi.reader.core.datastore.ReaderSettingsRepository
+import com.mozhi.reader.core.datastore.TavernRegexStore
+import com.mozhi.reader.core.datastore.TavernRequestSettings
+import com.mozhi.reader.core.datastore.TavernRequestSettingsStore
+import com.mozhi.reader.core.datastore.TavernVariableStore
+import com.mozhi.reader.core.datastore.TavernWorldInfoStore
+import com.mozhi.reader.core.datastore.UserMaskStore
 import com.mozhi.reader.core.media.ImageApiProvider
 import com.mozhi.reader.core.media.ImageApiSettingsStore
 import com.mozhi.reader.core.security.ApiKeyStore
@@ -19,6 +28,7 @@ import com.mozhi.reader.core.speech.TtsSettings
 import com.mozhi.reader.core.speech.TtsApiProvider
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.first
 import okhttp3.OkHttpClient
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -51,16 +61,85 @@ class AiClientFactory @Inject constructor(
     private val imageApiSettingsStore: ImageApiSettingsStore,
     private val apiKeyStore: ApiKeyStore,
     private val httpClient: OkHttpClient,
-    private val globalPromptPresetStore: GlobalPromptPresetStore
+    private val globalPromptPresetStore: GlobalPromptPresetStore,
+    private val tavernVariableStore: TavernVariableStore,
+    private val tavernRegexStore: TavernRegexStore,
+    private val tavernWorldInfoStore: TavernWorldInfoStore,
+    private val tavernRequestSettingsStore: TavernRequestSettingsStore,
+    private val userMaskStore: UserMaskStore,
+    private val settingsRepository: ReaderSettingsRepository,
+    private val personaDao: PersonaDao
 ) {
     /** Resolves the model assigned to [role] or throws a guided [AiClientException]. */
     suspend fun forRole(role: ModelRole): ResolvedChatClient {
         val (provider, model) = resolve(role)
         val resolved = forModel(provider, model)
+        // 只有 CHAT 角色吃用户的全局预设。IMAGE_PROMPT 刻意不走这里——生图请求有自己的消息序。
         if (role != ModelRole.CHAT) return resolved
+        // 预设顶层的采样参数：**只有用户显式打开开关才生效**（导入一份预设就悄悄改行为最难察觉）。
+        val request = tavernRequestSettingsStore.current()
+        val tuned = if (request.applySampling && request.hasSampling) {
+            resolved.copy(options = resolved.options.mergedWith(request))
+        } else {
+            resolved
+        }
         val presets = globalPromptPresetStore.current().filter { it.enabled }
-        return if (presets.isEmpty()) resolved else resolved.copy(
-            client = GlobalPresetChatApiClient(resolved.client, presets)
+        // 装饰器不只在"有启用的预设条目"时才需要：正则脚本与世界书各有独立开关，
+        // 只导入世界书/正则而不启用任何预设条目时，它们也必须跑起来。
+        val hasRegex = tavernRegexStore.current().any { it.enabled }
+        val worldInfo = tavernWorldInfoStore.current()
+        val hasWorldInfo = worldInfo.enabled && worldInfo.entries.isNotEmpty()
+        if (presets.isEmpty() && !hasRegex && !hasWorldInfo) return tuned
+        // 身份宏要读设置与角色卡（都是 suspend），在这里取好再捕获——
+        // 装饰器的 macroContext 是普通 lambda，不能直接调 suspend 函数。
+        val macros = tavernMacroContext()
+        return tuned.copy(
+            client = GlobalPresetChatApiClient(
+                delegate = tuned.client,
+                presets = presets,
+                variableStore = tavernVariableStore,
+                regexStore = tavernRegexStore,
+                worldInfoStore = tavernWorldInfoStore,
+                macroContext = { macros }
+            )
+        )
+    }
+
+    /**
+     * 预设值**覆盖** provider `extraJson` 里的同名项——预设就是"这套请求参数"的声明，
+     * 而它已经在一个显式开关后面了。
+     *
+     * [TavernRequestSettings.reasoningEffort] 只认本应用支持的档位：
+     * 实测那份预设写的是 `max`，而 OpenAI 官方只认 low/medium/high，硬发过去会被 400，
+     * 所以认不出来就保持原样、不动。
+     */
+    private fun ChatOptions.mergedWith(request: TavernRequestSettings): ChatOptions = copy(
+        temperature = request.temperature ?: temperature,
+        topP = request.topP ?: topP,
+        topK = request.topK ?: topK,
+        minP = request.minP ?: minP,
+        frequencyPenalty = request.frequencyPenalty ?: frequencyPenalty,
+        presencePenalty = request.presencePenalty ?: presencePenalty,
+        repetitionPenalty = request.repetitionPenalty ?: repetitionPenalty,
+        maxTokens = request.maxTokens ?: maxTokens,
+        seed = request.seed ?: seed,
+        reasoning = request.reasoningEffort?.let { ReasoningEffort.fromWire(it) } ?: reasoning
+    )
+
+    /**
+     * 酒馆身份宏的来源：`{{char}}` 取当前角色卡名字，`{{user}}` 取用户面具名字，
+     * `{{persona}}` 取角色卡的人设描述。取不到就留空——此时对应宏原样保留在提示词里，
+     * 用户能在输出里一眼看出「这个宏没被替换」，比静默替换成空串好排查。
+     */
+    private suspend fun tavernMacroContext(): MacroContext {
+        val persona = runCatching {
+            settingsRepository.activePersonaId.first()?.let { personaDao.getPersona(it) }
+        }.getOrNull()
+        val mask = runCatching { userMaskStore.activeMask() }.getOrNull()
+        return MacroContext(
+            characterName = persona?.name.orEmpty(),
+            userName = mask?.name.orEmpty(),
+            persona = persona?.personality.orEmpty()
         )
     }
 
@@ -175,6 +254,8 @@ class AiClientFactory @Inject constructor(
                         sampler = config.sampler,
                         steps = config.steps,
                         scale = config.scale,
+                        ucPreset = config.ucPreset,
+                        qualityToggle = config.qualityToggle,
                         httpClient = httpClient
                     ),
                     label = "NovelAI ${config.model}"
@@ -298,6 +379,7 @@ class AiClientFactory @Inject constructor(
         val modelId = providerDao.getAssignment(role)?.modelId
             ?: (if (role == ModelRole.PROACTIVE_ANNOTATION) providerDao.getAssignment(ModelRole.CHEAP)?.modelId else null)
             ?: (if (role == ModelRole.TRANSLATION) providerDao.getAssignment(ModelRole.CHAT)?.modelId else null)
+            ?: (if (role == ModelRole.IMAGE_PROMPT) providerDao.getAssignment(ModelRole.CHAT)?.modelId else null)
             ?: throw AiClientException.NotConfigured(role.label())
         val model = providerDao.getModel(modelId)
             ?: throw AiClientException.NotConfigured(role.label())
@@ -310,7 +392,8 @@ class AiClientFactory @Inject constructor(
     }
 
     private fun ModelRole.requiredType(): AiModelType = when (this) {
-        ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.SUGGESTION, ModelRole.PROACTIVE_ANNOTATION -> AiModelType.CHAT
+        ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.SUGGESTION,
+        ModelRole.PROACTIVE_ANNOTATION, ModelRole.IMAGE_PROMPT -> AiModelType.CHAT
         ModelRole.EMBEDDING -> AiModelType.EMBEDDING
         ModelRole.RERANK -> AiModelType.RERANK
         ModelRole.TTS -> AiModelType.TTS
@@ -327,6 +410,7 @@ class AiClientFactory @Inject constructor(
         ModelRole.RERANK -> "重排模型"
         ModelRole.TTS -> "TTS 模型"
         ModelRole.IMAGE -> "生图模型"
+        ModelRole.IMAGE_PROMPT -> "生图提示词模型（或主对话模型）"
     }
 
     private companion object {

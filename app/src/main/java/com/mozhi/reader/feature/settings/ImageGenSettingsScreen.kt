@@ -36,6 +36,8 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -57,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.mozhi.reader.core.media.ImageApiProvider
 import com.mozhi.reader.core.media.NOVELAI_SAMPLERS
+import com.mozhi.reader.core.media.NOVELAI_MODELS
 import com.mozhi.reader.core.media.sizeOptions
 import com.mozhi.reader.ui.components.MoReadBackdrop
 import java.util.Locale
@@ -80,12 +83,19 @@ fun ImageGenSettingsScreen(
         trim = true, onCommit = viewModel::setBaseUrl)
     val modelDraft = rememberCommittedTextFieldState(drafts, "model", settings.model,
         trim = true, onCommit = viewModel::setModel)
+    var modelMenuExpanded by remember { mutableStateOf(false) }
     val sizeDraft = rememberCommittedTextFieldState(drafts, "size", settings.size,
         trim = true, onCommit = viewModel::setSize)
     val positivePromptDraft = rememberCommittedTextFieldState(drafts, "positivePrompt", settings.positivePrompt,
         trim = false, onCommit = viewModel::setPositivePrompt)
     val negativePromptDraft = rememberCommittedTextFieldState(drafts, "negativePrompt", settings.negativePrompt,
         trim = false, onCommit = viewModel::setNegativePrompt)
+    val jailbreakDraft = rememberCommittedTextFieldState(drafts, "jailbreak", settings.jailbreakPrompt,
+        trim = false, onCommit = viewModel::setJailbreakPrompt)
+    val specDraft = rememberCommittedTextFieldState(drafts, "imageSpec", settings.imageSpec,
+        trim = false, onCommit = viewModel::setImageSpec)
+    val thinkingDraft = rememberCommittedTextFieldState(drafts, "imageThinking", settings.imageThinking,
+        trim = false, onCommit = viewModel::setImageThinking)
     val saveGate = rememberDraftSaveGate(drafts, viewModel::flushPendingWrites, viewModel::discardFailedWrites)
     fun afterDrafts(action: () -> Unit) { saveGate.run(action = action) }
     fun leaveAfterDrafts(action: () -> Unit) { saveGate.run(navigation = true, action = action) }
@@ -218,14 +228,37 @@ fun ImageGenSettingsScreen(
                         Text(
                             when (settings.provider) {
                                 ImageApiProvider.NOVELAI ->
-                                    "如 nai-diffusion-4-5-full / nai-diffusion-3"
+                                    "可从右侧下拉选；也可手填（如 nai-diffusion-4-5-full）"
                                 else -> "如 gpt-image-1；中转命名以其文档为准"
                             }
                         )
                     },
                     singleLine = true,
+                    trailingIcon = if (settings.provider == ImageApiProvider.NOVELAI) {
+                        {
+                            IconButton(onClick = { modelMenuExpanded = true }) {
+                                Icon(Icons.Outlined.ExpandMore, contentDescription = "常用模型")
+                            }
+                        }
+                    } else null,
                     modifier = Modifier.fillMaxWidth().committedDraft(modelDraft)
                 )
+                if (settings.provider == ImageApiProvider.NOVELAI) {
+                    DropdownMenu(
+                        expanded = modelMenuExpanded,
+                        onDismissRequest = { modelMenuExpanded = false }
+                    ) {
+                        NOVELAI_MODELS.forEach { id ->
+                            DropdownMenuItem(
+                                text = { Text(id) },
+                                onClick = {
+                                    modelMenuExpanded = false
+                                    afterDrafts { drafts.acceptExternalChanges(); viewModel.setModel(id) }
+                                }
+                            )
+                        }
+                    }
+                }
 
                 var sizeMenuExpanded by remember { mutableStateOf(false) }
                 Box {
@@ -343,6 +376,69 @@ fun ImageGenSettingsScreen(
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth().committedDraft(negativePromptDraft)
                     )
+                    // UC 预设：NAI 自带的「不想要的内容」档位。Heavy 会排斥一部分画面元素，
+                    // 出成人向或特殊题材的图时经常需要降到 Light / None。
+                    var ucMenuExpanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(expanded = ucMenuExpanded, onExpandedChange = { ucMenuExpanded = it }) {
+                        OutlinedTextField(
+                            value = ucPresetLabel(settings.ucPreset),
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("UC 预设（不想要的内容）") },
+                            supportingText = { Text("Heavy 会排斥较多元素；画面被莫名压制时试 Light 或 None") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = ucMenuExpanded) },
+                            modifier = Modifier.fillMaxWidth().menuAnchor(
+                                ExposedDropdownMenuAnchorType.PrimaryNotEditable
+                            )
+                        )
+                        ExposedDropdownMenu(expanded = ucMenuExpanded, onDismissRequest = { ucMenuExpanded = false }) {
+                            listOf(0 to "Heavy（默认）", 1 to "Light", 2 to "None", 3 to "Human Focus").forEach { (value, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        ucMenuExpanded = false
+                                        afterDrafts { viewModel.setUcPreset(value) }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("自动追加质量词", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "关掉后由你自己在「固定正面提示词」里写质量词",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = settings.qualityToggle, onCheckedChange = { afterDrafts { viewModel.setQualityToggle(it) } })
+                    }
+                    // 出图链路的三个可编辑提示词：破限 / 规范 / 思考清单。
+                    OutlinedTextField(
+                        value = jailbreakDraft.value,
+                        onValueChange = jailbreakDraft::edit,
+                        label = { Text("生图破限（可选）") },
+                        supportingText = { Text("留空用内置默认（含成人内容条款）。这里只影响出图，不影响聊天") },
+                        minLines = 4,
+                        modifier = Modifier.fillMaxWidth().committedDraft(jailbreakDraft)
+                    )
+                    OutlinedTextField(
+                        value = specDraft.value,
+                        onValueChange = specDraft::edit,
+                        label = { Text("生图规范（可选）") },
+                        supportingText = { Text("tag 写法与角色块分工；留空按渠道自动选内置规范") },
+                        minLines = 4,
+                        modifier = Modifier.fillMaxWidth().committedDraft(specDraft)
+                    )
+                    OutlinedTextField(
+                        value = thinkingDraft.value,
+                        onValueChange = thinkingDraft::edit,
+                        label = { Text("思考清单（可选）") },
+                        supportingText = { Text("出图前让模型先过一遍检查点；留空用内置默认") },
+                        minLines = 4,
+                        modifier = Modifier.fillMaxWidth().committedDraft(thinkingDraft)
+                    )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -385,6 +481,13 @@ fun ImageGenSettingsScreen(
             }
         }
     }
+}
+
+private fun ucPresetLabel(value: Int): String = when (value) {
+    1 -> "Light"
+    2 -> "None"
+    3 -> "Human Focus"
+    else -> "Heavy（默认）"
 }
 
 private fun ImageApiProvider.label(): String = when (this) {

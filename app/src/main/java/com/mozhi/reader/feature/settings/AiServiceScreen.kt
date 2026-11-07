@@ -130,7 +130,7 @@ internal fun ModelAssignmentCard(providers: List<AiProviderEntity>, models: List
     assignments: Map<ModelRole, Long?>, onSelect: (ModelRole, Long?) -> Unit) {
     val providersById = providers.associateBy { it.id }
     val groups = listOf(
-        "阅读与伴读" to listOf(ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.PROACTIVE_ANNOTATION, ModelRole.SUGGESTION),
+        "阅读与伴读" to listOf(ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.PROACTIVE_ANNOTATION, ModelRole.SUGGESTION, ModelRole.IMAGE_PROMPT),
         "检索与媒体" to listOf(ModelRole.EMBEDDING, ModelRole.RERANK, ModelRole.TTS, ModelRole.IMAGE)
     )
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -145,6 +145,7 @@ internal fun ModelAssignmentCard(providers: List<AiProviderEntity>, models: List
                         ModelRole.PROACTIVE_ANNOTATION -> eligible.firstOrNull { it.id == assignments[ModelRole.CHEAP] }
                         ModelRole.SUGGESTION -> eligible.firstOrNull { it.id == assignments[ModelRole.CHEAP] }
                             ?: eligible.firstOrNull { it.id == assignments[ModelRole.CHAT] }
+                        ModelRole.IMAGE_PROMPT -> eligible.firstOrNull { it.id == assignments[ModelRole.CHAT] }
                         else -> null
                     }
                     ModelAssignmentRow(role, eligible, providersById, assignments[role], fallback) { onSelect(role, it) }
@@ -190,6 +191,7 @@ private fun ModelRole.unassignedLabel(): String = when (this) {
     ModelRole.TRANSLATION -> "跟随主对话模型"
     ModelRole.PROACTIVE_ANNOTATION -> "跟随批量任务（cheap）"
     ModelRole.SUGGESTION -> "跟随默认模型"
+    ModelRole.IMAGE_PROMPT -> "跟随主对话模型"
     ModelRole.RERANK -> "使用本地排序"
     else -> "选择模型"
 }
@@ -204,6 +206,7 @@ private fun ModelRole.icon(): ImageVector = when (this) {
     ModelRole.RERANK -> Icons.Outlined.Sort
     ModelRole.TTS -> Icons.Outlined.GraphicEq
     ModelRole.IMAGE -> Icons.Outlined.Image
+    ModelRole.IMAGE_PROMPT -> Icons.Outlined.AutoAwesome
 }
 
 /** 向量索引不是「分配了模型就算成功」；这里展示实际落盘章节与可操作错误。 */
@@ -290,6 +293,7 @@ internal fun ModelRole.label(): String = when (this) {
     ModelRole.RERANK -> "Rerank（可选）"
     ModelRole.TTS -> "语音朗读"
     ModelRole.IMAGE -> "生图"
+    ModelRole.IMAGE_PROMPT -> "生图提示词"
 }
 
 private fun ModelRole.purpose(): String = when (this) {
@@ -302,10 +306,12 @@ private fun ModelRole.purpose(): String = when (this) {
     ModelRole.RERANK -> "书内检索候选重排"
     ModelRole.TTS -> "听书语音合成"
     ModelRole.IMAGE -> "角色头像与插图"
+    ModelRole.IMAGE_PROMPT -> "把选段/场景写成生图提示词；不选就用主对话模型（但会叠加聊天全局预设）"
 }
 
 private fun ModelRole.requiredModelType(): AiModelType = when (this) {
-    ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.SUGGESTION, ModelRole.PROACTIVE_ANNOTATION -> AiModelType.CHAT
+    ModelRole.CHAT, ModelRole.TRANSLATION, ModelRole.CHEAP, ModelRole.SUGGESTION,
+    ModelRole.PROACTIVE_ANNOTATION, ModelRole.IMAGE_PROMPT -> AiModelType.CHAT
     ModelRole.EMBEDDING -> AiModelType.EMBEDDING
     ModelRole.RERANK -> AiModelType.RERANK
     ModelRole.TTS -> AiModelType.TTS

@@ -58,7 +58,16 @@ data class ImageRecipe(
     val seed: Long? = null,
     val size: String? = null,
     val backend: String = "",
-    val promptOverride: String = ""
+    val promptOverride: String = "",
+    /**
+     * 规划器产出的 **Base 块**（NAI 4/5 与通用后端的全局部分：人数、景别、场景、光线、共享关系）。
+     * 非空时优先于「画风 + 镜头」的旧拼接方式。
+     */
+    val baseTag: String = "",
+    /** 规划器产出的**每角色块**，与 [cast] 同序；写进 NAI 的 `char_captions`。 */
+    val characterTags: List<String> = emptyList(),
+    /** 本画面专用的负面词（规划器只写与正文冲突或本构图易误生成的项；质量词由代码附加）。 */
+    val negativeExtra: String = ""
 ) {
     fun encode(): String = ImageRecipeCodec.json.encodeToString(serializer(), this)
 }
@@ -122,8 +131,19 @@ data class AssembledPrompt(val prompt: String, val base: String, val characterPr
 object RecipeAssembler {
     fun assemble(recipe: ImageRecipe, capabilities: ImageCapabilities): AssembledPrompt {
         val style = if (capabilities.tags) recipe.style.tags.ifBlank { recipe.style.natural } else recipe.style.natural.ifBlank { recipe.style.tags }
-        val characters = recipe.cast.map { if (capabilities.tags) it.tags.ifBlank { it.natural } else it.natural }
-        val base = listOf(style, recipe.shot.text()).filter(String::isNotBlank).joinToString(", ")
+        // 规划器给了角色块就优先用它的（它写的是"外貌照抄库 + 当前服装 + 动作 + 表情 + 视线"），
+        // 否则退回外貌库的固定描述。
+        val characters = if (recipe.characterTags.size == recipe.cast.size && recipe.characterTags.isNotEmpty()) {
+            recipe.characterTags
+        } else {
+            recipe.cast.map { if (capabilities.tags) it.tags.ifBlank { it.natural } else it.natural }
+        }
+        // Base 块：规划器产出优先；没有就退回"画风 + 镜头"。
+        val base = if (recipe.baseTag.isNotBlank()) {
+            listOf(style, recipe.baseTag).filter(String::isNotBlank).joinToString(", ")
+        } else {
+            listOf(style, recipe.shot.text()).filter(String::isNotBlank).joinToString(", ")
+        }
         val natural = buildString {
             append("Style: ").append(style)
             recipe.cast.zip(characters).forEach { (look, description) ->
@@ -140,10 +160,15 @@ object RecipeAssembler {
             if (recipe.style.negative.isNotBlank()) append("\nAvoid: ").append(recipe.style.negative)
         }
         val prompt = recipe.promptOverride.ifBlank {
-            if (!capabilities.tags) natural else if (capabilities.perCharacterPrompt) base
-            else (listOf(base) + characters).filter(String::isNotBlank).joinToString(", ")
+            when {
+                !capabilities.tags -> natural
+                capabilities.perCharacterPrompt -> base
+                else -> (listOf(base) + characters).filter(String::isNotBlank).joinToString(", ")
+            }
         }
-        return AssembledPrompt(prompt, recipe.promptOverride.ifBlank { base }, characters, recipe.style.negative)
+        val negative = listOf(recipe.style.negative, recipe.negativeExtra)
+            .filter(String::isNotBlank).joinToString(", ")
+        return AssembledPrompt(prompt, recipe.promptOverride.ifBlank { base }, characters, negative)
     }
 }
 

@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import okhttp3.Call
@@ -166,12 +167,18 @@ class OpenAiCompatClient(
                 streamOptions = if (stream) JsonObject(mapOf("include_usage" to kotlinx.serialization.json.JsonPrimitive(true))) else null
             )
         ).jsonObject.let { encoded ->
-            val withTopP = options.topP?.let {
-                encoded.mergeExtras(
-                    JsonObject(mapOf("top_p" to kotlinx.serialization.json.JsonPrimitive(it)))
-                )
-            } ?: encoded
-            withTopP.mergeExtras(options.extraBody)
+            // 采样扩展走 JSON 合并而不是加进 ChatCompletionRequest：这些是**非官方字段**，
+            // 只有显式设了值才出现，避免给严格校验字段的供应商添麻烦。
+            val sampling = buildJsonObject {
+                options.topP?.let { put("top_p", it) }
+                options.topK?.let { put("top_k", it) }
+                options.minP?.let { put("min_p", it) }
+                options.frequencyPenalty?.let { put("frequency_penalty", it) }
+                options.presencePenalty?.let { put("presence_penalty", it) }
+                options.repetitionPenalty?.let { put("repetition_penalty", it) }
+                options.seed?.let { put("seed", it) }
+            }
+            encoded.mergeExtras(sampling.takeIf { it.isNotEmpty() }).mergeExtras(options.extraBody)
         }
         return jsonRequest(
             endpointUrl(chatEndpointPath, "/chat/completions"),

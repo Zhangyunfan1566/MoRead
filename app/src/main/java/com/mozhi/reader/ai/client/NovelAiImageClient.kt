@@ -32,6 +32,10 @@ class NovelAiImageClient(
     private val sampler: String = "",
     private val steps: Int = 28,
     private val scale: Float = 5f,
+    /** NAI 的 UC 预设档位：0=Heavy 1=Light 2=None 3=Human Focus。 */
+    private val ucPreset: Int = 0,
+    /** 是否让官方自动追加质量词。 */
+    private val qualityToggle: Boolean = true,
     private val httpClient: OkHttpClient
 ) : ImageGenerationClient {
 
@@ -124,8 +128,8 @@ class NovelAiImageClient(
             "sampler" to JsonPrimitive(sampler.trim().ifBlank { DEFAULT_SAMPLER }),
             "steps" to JsonPrimitive(steps.coerceIn(1, 50)),
             "n_samples" to JsonPrimitive(1),
-            "ucPreset" to JsonPrimitive(0),
-            "qualityToggle" to JsonPrimitive(true),
+            "ucPreset" to JsonPrimitive(ucPreset.coerceIn(0, 3)),
+            "qualityToggle" to JsonPrimitive(qualityToggle),
             "negative_prompt" to JsonPrimitive(negative)
         )
         request.seed?.let { parameters["seed"] = JsonPrimitive(it and 0xffffffffL) }

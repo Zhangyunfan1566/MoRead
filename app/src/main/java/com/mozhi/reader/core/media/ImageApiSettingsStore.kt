@@ -3,6 +3,7 @@ package com.mozhi.reader.core.media
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -41,9 +42,27 @@ val NOVELAI_SAMPLERS = listOf(
     "k_euler_ancestral",
     "k_euler",
     "k_dpmpp_2m",
+    // DPM++ 2M SDE：细节与质感通常比 2M 更好，采样偏慢，官方同样支持。
+    "k_dpmpp_2m_sde",
     "k_dpmpp_2s_ancestral",
     "k_dpmpp_sde",
     "ddim_v3"
+)
+
+/**
+ * NovelAI 生图模型（仅列**生成**模型；本应用的独立生图 API 是文生图，
+ * 用不到 inpainting / 局部重绘变体）。选择后写入 [ImageApiSettings.model]。
+ */
+val NOVELAI_MODELS: List<String> = listOf(
+    "nai-diffusion-5-full",
+    "nai-diffusion-5-curated",
+    "nai-diffusion-5-full-medium",
+    "nai-diffusion-4-5-full",
+    "nai-diffusion-4-5-curated",
+    "nai-diffusion-4-full",
+    "nai-diffusion-4-curated-preview",
+    "nai-diffusion-3",
+    "nai-diffusion-furry-3"
 )
 
 /** 独立生图 API 配置；填齐后优先于「模型分配」的生图模型。 */
@@ -62,7 +81,20 @@ data class ImageApiSettings(
     /** 仅 NovelAI：采样步数。 */
     val steps: Int = 28,
     /** 仅 NovelAI：提示词相关度（guidance scale）。 */
-    val scale: Float = 5f
+    val scale: Float = 5f,
+    /**
+     * 仅 NovelAI：NAI 的 UC 预设档位。0 = Heavy，1 = Light，2 = None，3 = Human Focus。
+     * 出 R18 图时 Heavy 会排斥一部分画面元素，可以在这里改。
+     */
+    val ucPreset: Int = 0,
+    /** 仅 NovelAI：是否让官方自动追加质量词。 */
+    val qualityToggle: Boolean = true,
+    /** 生图专用破限；留空回落内置默认。 */
+    val jailbreakPrompt: String = "",
+    /** 生图提示词规范（NAI / 通用各一套）；留空回落内置默认。 */
+    val imageSpec: String = "",
+    /** 出图前的思考清单；留空回落内置默认。 */
+    val imageThinking: String = ""
 ) {
     val configured: Boolean get() = baseUrl.isNotBlank() && model.isNotBlank()
 
@@ -90,6 +122,11 @@ class ImageApiSettingsStore @Inject constructor(
             prefs[KEY_SAMPLER] = next.sampler
             prefs[KEY_STEPS] = next.steps
             prefs[KEY_SCALE] = next.scale
+            prefs[KEY_UC_PRESET] = next.ucPreset
+            prefs[KEY_QUALITY_TOGGLE] = next.qualityToggle
+            prefs[KEY_JAILBREAK] = next.jailbreakPrompt
+            prefs[KEY_IMAGE_SPEC] = next.imageSpec
+            prefs[KEY_IMAGE_THINKING] = next.imageThinking
         }
     }
 
@@ -104,7 +141,12 @@ class ImageApiSettingsStore @Inject constructor(
         negativePrompt = prefs[KEY_NEGATIVE].orEmpty(),
         sampler = prefs[KEY_SAMPLER].orEmpty(),
         steps = prefs[KEY_STEPS] ?: 28,
-        scale = prefs[KEY_SCALE] ?: 5f
+        scale = prefs[KEY_SCALE] ?: 5f,
+        ucPreset = prefs[KEY_UC_PRESET] ?: 0,
+        qualityToggle = prefs[KEY_QUALITY_TOGGLE] ?: true,
+        jailbreakPrompt = prefs[KEY_JAILBREAK].orEmpty(),
+        imageSpec = prefs[KEY_IMAGE_SPEC].orEmpty(),
+        imageThinking = prefs[KEY_IMAGE_THINKING].orEmpty()
     )
 
     companion object {
@@ -120,5 +162,10 @@ class ImageApiSettingsStore @Inject constructor(
         private val KEY_SAMPLER = stringPreferencesKey("image_api_sampler")
         private val KEY_STEPS = intPreferencesKey("image_api_steps")
         private val KEY_SCALE = floatPreferencesKey("image_api_scale")
+        private val KEY_UC_PRESET = intPreferencesKey("image_api_uc_preset")
+        private val KEY_QUALITY_TOGGLE = booleanPreferencesKey("image_api_quality_toggle")
+        private val KEY_JAILBREAK = stringPreferencesKey("image_api_jailbreak")
+        private val KEY_IMAGE_SPEC = stringPreferencesKey("image_api_spec")
+        private val KEY_IMAGE_THINKING = stringPreferencesKey("image_api_thinking")
     }
 }

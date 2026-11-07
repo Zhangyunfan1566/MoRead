@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 
 /** Shared lenient JSON for every dialect. */
 val AiJson: Json = Json {
@@ -68,6 +69,8 @@ enum class PromptCacheTtl(val wire: String) {
  * ```json
  * {
  *   "temperature": 0.7, "top_p": 0.9, "max_tokens": 2048,
+ *   "top_k": 0, "min_p": 0, "frequency_penalty": 0, "presence_penalty": 0,
+ *   "repetition_penalty": 1, "seed": -1,
  *   "reasoning": "low" | "medium" | "high",
  *   "cache_prompt": true, "cache_ttl": "5m" | "1h",
  *   "headers": { "X-Custom": "v" },
@@ -85,6 +88,17 @@ data class ChatOptions(
     val topP: Float? = null,
     val maxTokens: Int? = null,
     val reasoning: ReasoningEffort? = null,
+    /**
+     * 采样扩展。`top_k` / `min_p` / `repetition_penalty` **不是** OpenAI 官方字段，
+     * 但绝大多数兼容网关（以及酒馆预设里普遍配置的参数）都认——它们只在**显式设了值**时
+     * 才被写进请求体，所以不会打扰那些严格校验字段的供应商。
+     */
+    val topK: Int? = null,
+    val minP: Float? = null,
+    val frequencyPenalty: Float? = null,
+    val presencePenalty: Float? = null,
+    val repetitionPenalty: Float? = null,
+    val seed: Long? = null,
     /** Anthropic prompt-cache lifetime; null disables the cache breakpoints. */
     val cacheTtl: PromptCacheTtl? = PromptCacheTtl.FIVE_MINUTES,
     val extraHeaders: Map<String, String> = emptyMap(),
@@ -108,6 +122,12 @@ data class ChatOptions(
                 temperature = (root["temperature"] as? JsonPrimitive)?.floatOrNull,
                 topP = (root["top_p"] as? JsonPrimitive)?.floatOrNull,
                 maxTokens = (root["max_tokens"] as? JsonPrimitive)?.intOrNull,
+                topK = (root["top_k"] as? JsonPrimitive)?.intOrNull,
+                minP = (root["min_p"] as? JsonPrimitive)?.floatOrNull,
+                frequencyPenalty = (root["frequency_penalty"] as? JsonPrimitive)?.floatOrNull,
+                presencePenalty = (root["presence_penalty"] as? JsonPrimitive)?.floatOrNull,
+                repetitionPenalty = (root["repetition_penalty"] as? JsonPrimitive)?.floatOrNull,
+                seed = (root["seed"] as? JsonPrimitive)?.longOrNull,
                 reasoning = ReasoningEffort.fromWire((root["reasoning"] as? JsonPrimitive)?.content),
                 cacheTtl = if (!cacheEnabled) {
                     null

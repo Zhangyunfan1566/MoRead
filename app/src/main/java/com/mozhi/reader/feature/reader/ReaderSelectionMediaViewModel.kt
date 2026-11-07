@@ -172,12 +172,15 @@ class ReaderSelectionMediaViewModel @Inject constructor(
         val selected = selection.trim().take(MAX_IMAGE_SOURCE_CHARS)
         if (selected.isEmpty()) return
         val nearby = contextText.trim().take(MAX_IMAGE_CONTEXT_CHARS)
-        val fallbackPrompt = buildString {
-            append("小说插画，忠实表现以下选段；无文字、无水印。")
-            if (bookTitle.isNotBlank()) append("书名《").append(bookTitle).append("》。")
-            if (chapterTitle.isNotBlank()) append("章节：").append(chapterTitle).append("。")
-            append("画面内容：").append(selected)
-            if (nearby.isNotBlank()) append("。附近语境：").append(nearby)
+        // 交给规划器（ImageSceneArchitect）去选画面、写 tag、维护角色外貌；
+        // 这里只负责把「选段 + 附近语境 + 章节信息」原样递过去，不再自己拼一段中文提示词。
+        val planningSource = buildString {
+            if (bookTitle.isNotBlank()) append("《").append(bookTitle).append("》")
+            if (chapterTitle.isNotBlank()) {
+                append(" 第 ").append(chapterIndex + 1).append(" 章：").append(chapterTitle)
+            }
+            append("\n\n【选中段落】\n").append(selected)
+            if (nearby.isNotBlank()) append("\n\n【附近语境】\n").append(nearby)
         }
         generateImage(
             SelectionImageGeneration(
@@ -186,9 +189,9 @@ class ReaderSelectionMediaViewModel @Inject constructor(
                 charOffset = charOffset,
                 textAnchorJson = textAnchorJson,
                 sourceText = selection,
-                basePrompt = fallbackPrompt
+                basePrompt = planningSource
             ),
-            prompt = fallbackPrompt,
+            prompt = planningSource,
             keepPreview = false
         )
     }
