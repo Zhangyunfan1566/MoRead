@@ -71,7 +71,7 @@ private const val MAX_TAVERN_PRESET_BYTES = 8 * 1024 * 1024
  * 按上限读取导入文件。
  *
  * **不能直接 `readBytes()`**：那是先把整个文件读进内存、再去比大小，而 picker 的 mime 里带了
- * `"*/*"`，用户选到一个几百 MB 的文件就会在判断之前 OOM。这里最多读到上限 +1 字节，
+ * 通配类型，用户选到一个几百 MB 的文件就会在判断之前 OOM。这里最多读到上限 +1 字节，
  * 读满即停，超没超由调用方按长度判。
  */
 private fun readCapped(context: android.content.Context, uri: android.net.Uri, limit: Int): ByteArray {

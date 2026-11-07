@@ -13,7 +13,7 @@ import kotlinx.serialization.json.intOrNull
  * 导入酒馆的**世界书**（World Info / Lorebook）JSON。
  *
  * 为什么单独一个导入器：酒馆预设里的 `worldInfoBefore` / `worldInfoAfter` 只是**占位标记**，
- * 世界书正文根本不在预设文件里——它在 `data/<user>/worlds/*.json`，或者内嵌在角色卡里。
+ * 世界书正文根本不在预设文件里——它在 `data/<user>/worlds/` 下的单个 JSON，或者内嵌在角色卡里。
  * 所以"照搬酒馆预设体系"必须能单独吃一份世界书文件。
  *
  * 兼容三种常见形状：

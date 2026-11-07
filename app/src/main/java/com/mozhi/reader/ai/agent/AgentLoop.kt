@@ -142,6 +142,8 @@ class AgentLoop @Inject constructor(
         val specs = tools.map { it.spec }
         val byName = tools.associateBy { it.spec.name }
         var producedText = false
+        // 与 run() 同构：去重器按整轮对话存活，跨轮重复才是主要形态。
+        val deduper = ToolCallDeduper()
 
         repeat(maxRounds.coerceAtLeast(1)) { round ->
             val text = StringBuilder()
@@ -165,7 +167,7 @@ class AgentLoop @Inject constructor(
 
             if (text.isNotBlank()) producedText = true
             working.add(ChatMessage(ChatRole.ASSISTANT, text.toString(), toolCalls = requested))
-            executeTools(requested, byName).forEachIndexed { index, result ->
+            executeTools(requested, byName, deduper).forEachIndexed { index, result ->
                 working.add(ChatMessage(ChatRole.TOOL, result.content, toolCallId = requested[index].id))
             }
 

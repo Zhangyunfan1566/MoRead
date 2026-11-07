@@ -1,6 +1,7 @@
 package com.mozhi.reader.ai.media
 
 import com.mozhi.reader.ai.client.AiClientFactory
+import com.mozhi.reader.ai.client.AiJson
 import com.mozhi.reader.ai.client.ChatMessage
 import com.mozhi.reader.ai.client.ChatRole
 import com.mozhi.reader.ai.knowledge.BookCharacter
@@ -361,7 +362,11 @@ object SceneArchitectLibrary {
      * 只改动命中的字段（natural/tags/attributes 三处同步），并把 [LookSpec.sinceChapter] 推到当前章节——
      * 变化之前的画面仍取旧档案（[com.mozhi.reader.ai.media.visibleLook] 按章节挑）。
      */
-    fun applyChanges(current: LookSpec, changes: List<LookChange>, chapterIndex: Int): LookSpec? {
+    fun applyChanges(
+        current: LookSpec,
+        changes: List<ImageSceneArchitect.LookChange>,
+        chapterIndex: Int
+    ): LookSpec? {
         val relevant = changes.filter {
             it.name.equals(current.name, ignoreCase = true) || it.name == current.characterKey
         }.filter { it.value.isNotBlank() }
@@ -520,7 +525,7 @@ object SceneArchitectParser {
                     depth -= 1
                     if (depth == 0) {
                         val candidate = text.substring(start, index + 1)
-                        return runCatching { json.parseToJsonElement(candidate) as? JsonObject }.getOrNull()
+                        return runCatching { AiJson.parseToJsonElement(candidate) as? JsonObject }.getOrNull()
                     }
                 }
             }
