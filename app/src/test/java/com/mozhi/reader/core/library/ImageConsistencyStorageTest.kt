@@ -59,7 +59,7 @@ class ImageConsistencyStorageTest {
             dao.saveQueue(IllustrationQueueEntity("queue", 1, 0, "source", recipe.encode(), createdAt = 123))
             assertEquals(recipe, ImageRecipeCodec.decode(dao.queue(1).single().recipeJson))
             assertTrue(dao.referenceDocuments().any { "asset" in it })
-            val repository = ImageConsistencyRepository(db, mockk(), mockk(), mockk(), mockk(), context)
+            val repository = ImageConsistencyRepository(db, mockk(), mockk(), mockk(), mockk(), mockk(), context)
             val style = StyleSpec(presetId = "custom", natural = "Muted ink on paper", tags = "ink, muted colors",
                 negative = "text", seed = 42, referenceIds = listOf("template-reference"), referenceStrength = .45f)
             repository.saveTemplate("My ink style", style)

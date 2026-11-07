@@ -24,7 +24,10 @@ class CharacterResearchPipelineTest {
             type = AiProviderType.CHAT, createdAt = 1), "helper")
     private val cache = MemoryCache()
     private val agent = CharacterResearchAgent(
-        AgentLoop(mockk(), dagger.Lazy { error("unused") }, dagger.Lazy { error("unused") }, dagger.Lazy { error("unused") }, AgentToolExecutor { }),
+        AgentLoop(
+            mockk(), dagger.Lazy { error("unused") }, dagger.Lazy { error("unused") },
+            dagger.Lazy { error("unused") }, mockk(), AgentToolExecutor { }
+        ),
         KnowledgeJsonRequest(KnowledgeRequestLimiter()), mockk(relaxed = true))
 
     private fun request() = CharacterResearchRequest(1, "灯塔来信", ReadingScope.WholeBook, false, chapters, { "第${it + 1}章" },

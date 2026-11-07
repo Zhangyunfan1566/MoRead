@@ -39,7 +39,10 @@ class MimoFishTtsClientTest {
                     reply(request, audio, "audio/mpeg")
                 }
             }.build()
-            val factory = AiClientFactory(mockk(), mockk(), store, mockk(), keyStore, http, mockk())
+            val factory = AiClientFactory(
+                mockk(), mockk(), store, mockk(), keyStore, http, mockk(),
+                mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk()
+            )
             val resolved = factory.mediaForRole(ModelRole.TTS)
             assertArrayEquals(audio, resolved.client.synthesizeSpeech("你好").bytes)
             verify { keyStore.migrateAlias(any(), com.mozhi.reader.core.speech.TtsSettingsStore.apiKeyAlias(provider)) }

@@ -37,7 +37,10 @@ class ElevenLabsTtsClientTest {
             assertEquals(1.1f, body["voice_settings"]!!.jsonObject["speed"]!!.jsonPrimitive.float, 0.001f)
             reply(request)
         }.build()
-        val factory = AiClientFactory(mockk(), mockk(), store, mockk(), keys, http, mockk())
+        val factory = AiClientFactory(
+            mockk(), mockk(), store, mockk(), keys, http, mockk(),
+            mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk()
+        )
         val result = factory.mediaForRole(ModelRole.TTS).client.synthesizeSpeech("你好")
         assertArrayEquals(audio, result.bytes)
         assertEquals("eleven-request", result.generationId)

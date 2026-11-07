@@ -14,7 +14,10 @@ class TranslationModelAssignmentTest {
     private val dao = mockk<AiProviderDao>()
     private val repository = mockk<AiProviderRepository>()
     private val presets = mockk<GlobalPromptPresetStore>()
-    private val factory = AiClientFactory(dao, repository, mockk(), mockk(), mockk(), OkHttpClient(), presets)
+    private val factory = AiClientFactory(
+        dao, repository, mockk(), mockk(), mockk(), OkHttpClient(), presets,
+        mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk()
+    )
     private val provider = AiProviderEntity(1, "Test", "https://example.invalid", "test-key", AiProviderType.CHAT, createdAt = 0)
     init {
         coEvery { dao.getProvider(1) } returns provider

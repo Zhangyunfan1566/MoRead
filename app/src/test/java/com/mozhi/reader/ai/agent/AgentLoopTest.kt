@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import com.mozhi.reader.ai.memory.RollingSummarizer
+import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonObject
@@ -214,6 +215,8 @@ class AgentLoopTest {
             rollingSummarizer = dagger.Lazy {
                 RollingSummarizer(dao, dagger.Lazy { error("summariser never calls the factory here") })
             },
+            // 这些用例都不碰历史窗口预算，给一份"关掉裁剪"的设置即可。
+            requestSettingsStore = mockk(relaxed = true),
             toolExecutor = AgentToolExecutor { }
         )
 

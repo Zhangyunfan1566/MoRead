@@ -21,8 +21,10 @@ class ChapterKnowledgeAgentTest {
         AiProviderEntity(id = 1, name = "test", baseUrl = "https://example.test", apiKeyAlias = "alias",
             type = AiProviderType.CHAT, createdAt = 1), "extractor")
     private val agent = ChapterKnowledgeAgent(
-        AgentLoop(mockk(), dagger.Lazy { error("unused") }, dagger.Lazy { error("unused") },
-            dagger.Lazy { error("unused") }, AgentToolExecutor { }), KnowledgeRequestLimiter())
+        AgentLoop(
+            mockk(), dagger.Lazy { error("unused") }, dagger.Lazy { error("unused") },
+            dagger.Lazy { error("unused") }, mockk(), AgentToolExecutor { }
+        ), KnowledgeRequestLimiter())
 
     @Test fun proseAndMarkdownWrappedTextIsVerifiedWithoutASecondRequest() = runBlocking {
         client.responses += listOf(ChatDelta.Text("整理如下：\n```JSON\n"), ChatDelta.Text(valid + "\n```"))

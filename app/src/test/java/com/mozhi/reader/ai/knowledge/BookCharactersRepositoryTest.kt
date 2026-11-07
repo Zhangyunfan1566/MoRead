@@ -49,7 +49,10 @@ class BookCharactersRepositoryTest {
         every { library.observeBook(1) } returns MutableStateFlow(book)
         val provider = AiProviderEntity(id = 1, name = "测试模型", baseUrl = "https://example.test", apiKeyAlias = "alias", type = AiProviderType.CHAT, createdAt = 1)
         coEvery { factory.forRole(ModelRole.CHEAP) } returns ResolvedChatClient(client, ChatOptions.Default, provider, "test-extractor")
-        val loop = AgentLoop(chatDao, dagger.Lazy { error("Use resolved model") }, dagger.Lazy { error("No attachments") }, dagger.Lazy { error("No summaries") }, com.mozhi.reader.ai.agent.AgentToolExecutor { })
+        val loop = AgentLoop(
+            chatDao, dagger.Lazy { error("Use resolved model") }, dagger.Lazy { error("No attachments") },
+            dagger.Lazy { error("No summaries") }, mockk(), com.mozhi.reader.ai.agent.AgentToolExecutor { }
+        )
         val knowledgeAgent = ChapterKnowledgeAgent(loop, KnowledgeRequestLimiter())
         val readerTools = mockk<com.mozhi.reader.ai.agent.ReaderToolset>()
         every { readerTools.forBook(any(), any(), any(), any(), any(), any(), any()) } returns emptyList()

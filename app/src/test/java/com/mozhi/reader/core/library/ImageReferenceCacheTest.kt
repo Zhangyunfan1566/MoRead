@@ -56,7 +56,7 @@ class ImageReferenceCacheTest {
                 .body(byteArrayOf(1, 2, 3).toResponseBody("application/binary".toMediaType())).build()
         }.build()
         val client = NovelAiImageClient("https://image.novelai.net", "test", "nai-diffusion-4-5-full", "832x1216", negativePrompt = "", httpClient = http)
-        fun repository() = ImageConsistencyRepository(mockk(), mockk(), mockk(), settings, mockk(), context)
+        fun repository() = ImageConsistencyRepository(mockk(), mockk(), mockk(), settings, mockk(), mockk(), context)
         val recipe = ImageRecipe(backend = "nai-diffusion-4-5-full", shot = ShotSpec(action = "snow"), references = listOf(ReferenceSpec("ref", ReferenceKind.STYLE)))
         assertTrue(repository().request(recipe, client).references.single().encodedVibe)
         repository().request(recipe, client)
@@ -71,7 +71,7 @@ class ImageReferenceCacheTest {
         val settings = mockk<ReaderSettingsRepository> {
             every { settings } returns flowOf(ReaderSettings(imageLibrary = listOf(ReaderImageAsset("ref", "reference", source.path))))
         }
-        val repository = ImageConsistencyRepository(mockk(), mockk(), mockk(), settings, mockk(), context)
+        val repository = ImageConsistencyRepository(mockk(), mockk(), mockk(), settings, mockk(), mockk(), context)
         val client = NovelAiImageClient("https://image.novelai.net", "test", "nai-diffusion-4-5-full", "832x1216", negativePrompt = "", httpClient = OkHttpClient())
         val request = repository.request(ImageRecipe(references = listOf(ReferenceSpec("ref", ReferenceKind.CHARACTER))), client)
         val bytes = request.references.single().bytes
@@ -96,7 +96,7 @@ class ImageReferenceCacheTest {
         val settings = mockk<ReaderSettingsRepository> {
             every { settings } returns flowOf(ReaderSettings(imageLibrary = listOf(ReaderImageAsset("ref", "reference", source.path))))
         }
-        val repository = ImageConsistencyRepository(mockk(), mockk(), mockk(), settings, mockk(), context)
+        val repository = ImageConsistencyRepository(mockk(), mockk(), mockk(), settings, mockk(), mockk(), context)
         val client = NovelAiImageClient("https://image.novelai.net", "test", "nai-diffusion-4-5-full", "832x1216", negativePrompt = "", httpClient = OkHttpClient())
         val bytes = repository.request(ImageRecipe(references = listOf(ReferenceSpec("ref", ReferenceKind.CHARACTER))), client).references.single().bytes
         val result = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)

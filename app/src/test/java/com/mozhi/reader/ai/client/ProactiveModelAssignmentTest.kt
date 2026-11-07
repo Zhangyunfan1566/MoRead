@@ -14,7 +14,10 @@ class ProactiveModelAssignmentTest {
     private val dao = mockk<AiProviderDao>()
     private val repository = mockk<AiProviderRepository>()
     private val globalPresets = mockk<GlobalPromptPresetStore>()
-    private val factory = AiClientFactory(dao, repository, mockk(), mockk(), mockk(), OkHttpClient(), globalPresets)
+    private val factory = AiClientFactory(
+        dao, repository, mockk(), mockk(), mockk(), OkHttpClient(), globalPresets,
+        mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk()
+    )
     private val provider = AiProviderEntity(1, "Test", "https://example.invalid", "test-key", AiProviderType.CHAT, createdAt = 0)
     init {
         coEvery { dao.getProvider(1) } returns provider

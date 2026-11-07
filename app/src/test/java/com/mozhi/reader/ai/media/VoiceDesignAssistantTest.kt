@@ -31,7 +31,10 @@ class VoiceDesignAssistantTest {
             userProfile = "PRIVATE_USER_PROFILE", createdAt = 0)
         coEvery { personas.getPersonas() } returns listOf(persona)
         coEvery { personas.getPersona(7) } returns persona
-        val loop = AgentLoop(mockk(relaxed = true), dagger.Lazy { factory }, dagger.Lazy { mockk() }, dagger.Lazy { mockk() }, AgentToolExecutor {})
+        val loop = AgentLoop(
+            mockk(relaxed = true), dagger.Lazy { factory }, dagger.Lazy { mockk() },
+            dagger.Lazy { mockk() }, mockk(), AgentToolExecutor {}
+        )
         var round = 0
         val seen = mutableListOf<List<ChatMessage>>()
         every { client.chatStream(any(), any(), any()) } answers {
