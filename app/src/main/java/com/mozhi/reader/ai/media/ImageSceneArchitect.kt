@@ -549,5 +549,10 @@ object SceneArchitectParser {
     @Suppress("unused")
     private fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
 
-    private fun JsonElement?.orEmpty(): List<JsonElement> = (this as? JsonArray).orEmpty()
+    /**
+     * 注意必须显式写 `emptyList()`：这里定义的正是 [JsonElement] 上的 `orEmpty`，
+     * 写成 `.orEmpty()` 会解析回这个函数自己（JsonArray 也是 JsonElement），
+     * 结果是对着同一个接收者无限递归 → StackOverflowError。CI 实测在 7 个用例上炸过。
+     */
+    private fun JsonElement?.orEmpty(): List<JsonElement> = (this as? JsonArray) ?: emptyList()
 }

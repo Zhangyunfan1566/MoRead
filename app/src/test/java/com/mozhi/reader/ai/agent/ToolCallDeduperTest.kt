@@ -157,9 +157,11 @@ class ToolCallDeduperTest {
         val readAgain = call(name = "list_annotations", arguments = """{}""", id = "r2")
 
         val plan = deduper.planReadOnly(listOf(write, read, readAgain))
-        // 写入清空了 firstIndexForKey，所以第二条读取是新的一次，不是 duplicateOf
-        assertEquals(3, plan.fresh.size)
-        assertTrue(plan.duplicateOf.isEmpty())
+        // 写入只作废「写入之前」的缓存。写入之后的 read 与 readAgain 之间没有任何写入，
+        // 它们仍然是同一轮里的重复 —— 只跑一次才是去重器该做的事，写两个断言钉住。
+        assertEquals(2, plan.fresh.size)
+        assertEquals(1, plan.duplicateOf[2])
+        assertTrue(plan.reused.isEmpty())
     }
 
     @Test

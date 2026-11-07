@@ -243,10 +243,14 @@ object WorldInfoEngine {
             if (pattern != null) return pattern.matcher(haystack).find()
             // 编不过就当普通文本，不要因为一条坏键把整条世界书废掉
         }
+        // 走到这里说明不是可用的 /正则/ 形式（要么没闭合、要么编不过）。作者本意是正则但写坏了，
+        // 退化成普通文本时必须把包裹的斜杠剥掉：正文里不会有那些斜杠，留着就永远匹配不到，
+        // 一条坏键等于让整条世界书失效。
+        val plain = if (needle.startsWith("/")) needle.drop(1).substringBeforeLast('/') else needle
         val caseSensitive = entry.caseSensitive ?: options.caseSensitive
         val wholeWords = entry.matchWholeWords ?: options.matchWholeWords
         val text = if (caseSensitive) haystack else haystack.lowercase()
-        val target = if (caseSensitive) needle else needle.lowercase()
+        val target = if (caseSensitive) plain else plain.lowercase()
         if (!wholeWords) return text.contains(target)
         if (target.any(Char::isWhitespace)) return text.contains(target)
         val boundary = Regex("(?:^|\\W)" + Regex.escape(target) + "(?:$|\\W)")

@@ -53,10 +53,12 @@ class GlobalPromptInjectorTest {
         )
         assertEquals(4, out.size)
         val system = out.first().content
-        assertTrue(system.startsWith("前"))
+        // 每个注入块都带【label·name】前缀（与酒馆一致，也是上游既有行为），
+        // 所以要断"前后顺序"而不是 startsWith 原文。
+        assertTrue(system.indexOf("前") < system.indexOf("SYS"))
+        assertTrue(system.indexOf("SYS") < system.indexOf("后"))
         assertTrue(system.contains("SYS"))
         assertTrue(system.endsWith("后"))
-        assertEquals(4, out.size)
     }
 
     @Test
@@ -82,7 +84,9 @@ class GlobalPromptInjectorTest {
         assertEquals(4, out.size)
         val lastUser = out.last()
         assertEquals(ChatRole.USER, lastUser.role)
-        assertTrue(lastUser.content.startsWith("前"))
+        // 同 system 那条：带【label·name】前缀，按出现顺序断言。
+        assertTrue(lastUser.content.indexOf("前") < lastUser.content.indexOf("U2"))
+        assertTrue(lastUser.content.indexOf("U2") < lastUser.content.indexOf("后"))
         assertTrue(lastUser.content.endsWith("后"))
         assertTrue(lastUser.content.contains("U2"))
     }
@@ -282,8 +286,12 @@ class GlobalPromptInjectorTest {
             variables = TavernVariables()
         )
         assertEquals(6, out.size)
-        assertTrue(out[4].content.contains("正文：[破限正文]"))
-        assertFalse(out[4].content.contains("{{"))
+        // 两条都在 depth=0（预填充位，即原列表末尾之后）。同一点内按 order 落位：
+        // order=1 的装载在前、order=2 的使用在后 → out[4] 装载、out[5] 使用。
+        // setvar 自身渲染成空串，装载条目只剩【预设·装载】这行标题，正文落在使用条目里。
+        assertTrue(out[4].content.contains("装载"))
+        assertTrue(out[5].content.contains("正文：[破限正文]"))
+        assertFalse(out[5].content.contains("{{"))
     }
 
     @Test

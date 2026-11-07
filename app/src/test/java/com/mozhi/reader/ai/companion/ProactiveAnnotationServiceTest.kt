@@ -25,7 +25,9 @@ class ProactiveAnnotationServiceTest {
         } + com.mozhi.reader.core.datastore.GlobalPromptPreset("off", "disabled", "never-inject", false)
         val messages = proactiveAnnotationMessages(persona, "目标段落正文", presets)
         val system = messages.first().content.orEmpty()
-        val user = messages.last().content.orEmpty()
+        // 不能取 messages.last()：AFTER_HISTORY 的条目是独立消息、追加在末尾，
+        // 最后一条已经不是 user 了。按角色取那条被注入的 user。
+        val user = messages.first { it.role == com.mozhi.reader.ai.client.ChatRole.USER }.content.orEmpty()
         assertTrue(system.indexOf("marker-0") < system.indexOf("你是"))
         assertTrue(system.endsWith("marker-1"))
         assertTrue(user.indexOf("marker-2") < user.indexOf("正文前缀"))

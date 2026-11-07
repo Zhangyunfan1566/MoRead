@@ -13,14 +13,17 @@ package com.mozhi.reader.ai.media
  */
 object ImageTagNormalizer {
 
+    /** 中英文标点统一的标签分隔符：模型经常用顿号/句号/分号切标签，不切开就成了一整串。 */
+    private val separators = Regex("[,\\uFF0C\\u3001\\u3002\\uFF1B\\uFF1A;]")
+
     fun normalize(value: String): String = value
         .replace("```", "")
         .lineSequence()
         .map { it.trim().removePrefix("Tags:").removePrefix("tags:").trim() }
         .filter(String::isNotBlank)
         .joinToString(", ")
-        .split(',')
-        .map { it.trim().trimEnd('.', ';', '、') }
+        .split(separators)
+        .map { it.trim().trim('.', ';') }
         .filter(String::isNotBlank)
         .distinct()
         .joinToString(", ")

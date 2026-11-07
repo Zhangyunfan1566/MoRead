@@ -200,10 +200,11 @@ object TavernRegexEngine {
     // ---------- 替换串求值 ----------
 
     private fun replacement(script: TavernRegexScript, matcher: Matcher, text: String): String {
-        val template = script.replacement.replace(
-            Regex("\\{\\{match}}", RegexOption.IGNORE_CASE),
-            "\$0"
-        )
+        // 必须用 **lambda 版** replace：字符串版 `replace(input, "$0")` 会把 $0 当成
+        // 捕获组引用去展开，而这条正则没有捕获组 → 展开结果就是匹配到的 {{match}} 本身，
+        // 等于什么都没替换。实测就是 CI 里那条「expected [a] but was [{{match}}]」。
+        val template = Regex("\\{\\{match}}", RegexOption.IGNORE_CASE)
+            .replace(script.replacement) { "${'$'}0" }
         val out = StringBuilder(template.length + 16)
         var index = 0
         while (index < template.length) {

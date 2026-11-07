@@ -125,7 +125,9 @@ class TavernRegexEngineTest {
     fun `命名捕获组两种写法`() {
         val s = script(find = "(?<year>\\d+)", replacement = "$<year>")
         assertEquals("2026", TavernRegexEngine.apply("2026", s))
-        val brace = script(find = "(?<year>\\d+)", replacement = "${'$'}year}")
+        // ${year} 才是第二种写法；原来写成 "${'$'}year}"（少了左花括号）等于 $year}，
+        // 引擎按规则原样放过，断言自然不可能通过 —— 是测试笔误，不是引擎缺陷。
+        val brace = script(find = "(?<year>\\d+)", replacement = "${'$'}{year}")
         assertEquals("2026", TavernRegexEngine.apply("2026", brace))
     }
 

@@ -107,7 +107,7 @@ feature/reader/ReaderScreen.kt	11
 feature/reader/ReaderScrollPane.kt	2
 feature/reader/ReaderSearch.kt	10
 feature/reader/ReaderSelectionController.kt	1
-feature/reader/ReaderSelectionMediaViewModel.kt	19
+feature/reader/ReaderSelectionMediaViewModel.kt	18
 feature/reader/ReaderSettingsSheet.kt	2
 feature/reader/ReaderStyleEditorComponents.kt	17
 feature/reader/ReaderSyntaxHighlightEditor.kt	59
@@ -118,7 +118,7 @@ feature/reader/ReaderTextTools.kt	35
 feature/reader/ReaderTitleStyleEditor.kt	42
 feature/reader/ReaderTitleStyleSheet.kt	26
 feature/reader/ReaderToolPage.kt	2
-feature/reader/ReaderTransientOverlays.kt	27
+feature/reader/ReaderTransientOverlays.kt	28
 feature/reader/ReaderTypographyBehaviorPages.kt	52
 feature/reader/ReaderTypographyCard.kt	38
 feature/reader/ReaderTypographyControls.kt	7
@@ -153,7 +153,7 @@ feature/review/ReviewExporter.kt	11
 feature/review/ReviewOptionsMenu.kt	25
 feature/review/ReviewTemplateEditor.kt	24
 feature/review/ReviewTypography.kt	5
-feature/settings/AiServiceScreen.kt	55
+feature/settings/AiServiceScreen.kt	58
 feature/settings/AiSettingsComponents.kt	10
 feature/settings/AnnotationPromptSettingsScreen.kt	9
 feature/settings/ApiLogScreen.kt	31
@@ -166,9 +166,9 @@ feature/settings/DataSettingsViewModel.kt	16
 feature/settings/DraftSaveGate.kt	7
 feature/settings/FontLibraryScreen.kt	32
 feature/settings/FontLibraryViewModel.kt	7
-feature/settings/GlobalPresetSettingsScreen.kt	20
-feature/settings/GlobalPresetSettingsViewModel.kt	3
-feature/settings/ImageGenSettingsScreen.kt	30
+feature/settings/GlobalPresetSettingsScreen.kt	112
+feature/settings/GlobalPresetSettingsViewModel.kt	22
+feature/settings/ImageGenSettingsScreen.kt	43
 feature/settings/ImageGenSettingsViewModel.kt	10
 feature/settings/ImageLibraryScreen.kt	32
 feature/settings/ImageLibraryViewModel.kt	13
