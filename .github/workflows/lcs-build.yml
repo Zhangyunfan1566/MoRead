@@ -1,14 +1,16 @@
 name: LCS build
 
 # LCS 改造线专用：编译 + 单测 + 出 debug APK，产物留在 Actions 里供下载。
-# 上游的 android-ci.yml 只跑 main，这里覆盖 lcs/* 分支。
+# 上游的 android-ci.yml 只跑 main，这里覆盖 lcs/** 与 ci/**（基线对照分支）。
 on:
   push:
     branches:
       - "lcs/**"
+      - "ci/**"
   pull_request:
     branches:
       - "lcs/**"
+      - "ci/**"
   workflow_dispatch:
 
 permissions:
@@ -33,10 +35,15 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # 单测不阻断后续步骤：2574 项里有两项是上游自带的 Robolectric/Compose 抖动，
+      # 一挂就跳过打包等于拿不到任何产物。测试结论仍然让整个 job 变红（见最后一步）。
       - name: Unit tests
+        id: tests
+        continue-on-error: true
         run: ./gradlew :app:testDebugUnitTest --console=plain --stacktrace
 
       - name: Assemble debug APK
+        if: ${{ !cancelled() }}
         run: ./gradlew :app:assembleDebug --console=plain --stacktrace
 
       - name: Collect diagnostics
@@ -51,10 +58,17 @@ jobs:
           retention-days: 14
 
       - name: Collect APK
-        if: success()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: lcs-debug-apk
           path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
+
+      # 编译过、APK 也出了，但单测有失败 → 仍然把 job 判红，不许悄悄放过。
+      - name: Fail when unit tests failed
+        if: ${{ steps.tests.outcome == 'failure' }}
+        run: |
+          echo "单测有失败，详见 lcs-diagnostics 产物里的 test-results。"
+          exit 1
