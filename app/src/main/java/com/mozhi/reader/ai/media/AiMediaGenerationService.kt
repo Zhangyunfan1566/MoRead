@@ -102,7 +102,7 @@ class AiMediaGenerationService @Inject constructor(
         personaId: Long?,
         textAnchorJson: String = "",
         persist: Boolean = true,
-        beforePaidRequest: suspend () => Boolean = { true },
+        beforePaidRequest: suspend () -> Boolean = { true },
         recipe: ImageRecipe? = null,
         /** 选中段落之前的上下文。只用于让规划器理解「当前状态是怎么来的」，不参与配图。 */
         contextText: String = ""
