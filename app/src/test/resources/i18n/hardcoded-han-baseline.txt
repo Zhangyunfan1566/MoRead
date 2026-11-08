@@ -107,7 +107,7 @@ feature/reader/ReaderScreen.kt	11
 feature/reader/ReaderScrollPane.kt	2
 feature/reader/ReaderSearch.kt	10
 feature/reader/ReaderSelectionController.kt	1
-feature/reader/ReaderSelectionMediaViewModel.kt	18
+feature/reader/ReaderSelectionMediaViewModel.kt	17
 feature/reader/ReaderSettingsSheet.kt	2
 feature/reader/ReaderStyleEditorComponents.kt	17
 feature/reader/ReaderSyntaxHighlightEditor.kt	59
