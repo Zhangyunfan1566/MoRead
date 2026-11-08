@@ -6,10 +6,18 @@ import kotlinx.serialization.json.Json
 /** Persisted snapshots contain asset IDs, never credentials, transient URLs or image bytes. */
 @Serializable
 data class StyleSpec(
-    val presetId: String = "watercolor",
-    val natural: String = "soft watercolor illustration, muted palette, paper texture, gentle light",
-    val tags: String = "watercolor, illustration, muted colors, paper texture, soft lighting",
-    val negative: String = "text, watermark, lowres",
+    /**
+     * 空 = **不指定画风**，交给画面规划器按题材与正文自己决定。
+     *
+     * 以前这里写死 presetId="watercolor" 加一整串 "watercolor, illustration, muted colors,
+     * paper texture, soft lighting"，而且这串是拼在 base prompt **最前面**的 ——
+     * 等于每张图无论什么题材都被强行套上一层文艺水彩，用户没选过任何画风也会中招。
+     */
+    val presetId: String = "",
+    val natural: String = "",
+    val tags: String = "",
+    /** 负面词也留空：标签型后端（NovelAI）已经有一份默认负面词，不必在这里重复。 */
+    val negative: String = "",
     val seed: Long? = null,
     val referenceIds: List<String> = emptyList(),
     val referenceStrength: Float = 0.6f,
@@ -145,7 +153,9 @@ object RecipeAssembler {
             listOf(style, recipe.shot.text()).filter(String::isNotBlank).joinToString(", ")
         }
         val natural = buildString {
-            append("Style: ").append(style)
+            // 没指定画风（StyleSpec 默认值）时不要留下一个空的 "Style: " 前缀 ——
+            // 那会让模型以为画风就是空字符串。
+            if (style.isNotBlank()) append("Style: ").append(style)
             recipe.cast.zip(characters).forEach { (look, description) ->
                 append("\nCharacter ").append(look.name).append(": ").append(description)
             }
@@ -182,10 +192,56 @@ object ShotParser {
 }
 
 data class StylePreset(val id: String, val natural: String, val tags: String = natural)
+
+/**
+ * 画风预设：**全部是插图/漫画向**，第一条就是"不指定"。
+ *
+ * 原来的六条是 artsy-literary 取向（水彩、厚涂、赛璐璐、水墨、铅笔、复古绘本），
+ * 拿去画小说里的性场面基本是废的 —— 这类内容要的是 anime / manga 插画体系，
+ * 素描和水墨只会把画面糊成一团。现在按实际用途重排：
+ * - 「自动」= 不指定，交给画面规划器按题材决定（默认项）；
+ * - 「动漫插画」「厚涂」「赛璐璐」= 日式插画三条主力；
+ * - 「韩漫」「美式漫画」= 网络小说常见的两种漫画风；
+ * - 「写实」「胶片」「水彩」「水墨」「铅笔」「复古绘本」保留，供确实想要的场景。
+ */
 val IMAGE_STYLE_PRESETS = listOf(
+    StylePreset("", ""),
+    StylePreset(
+        "anime",
+        "anime illustration, digital painting, clean lineart, cel shading, soft cel colors, " +
+            "detailed eyes, high quality anime key visual"
+    ),
+    StylePreset(
+        "painting",
+        "painterly illustration, thick brush strokes, rich rendering, dramatic light, " +
+            "textured canvas, semi-realistic"
+    ),
+    StylePreset(
+        "cel",
+        "cel shading, anime screencap, flat colors, crisp linework, saturated palette, " +
+            "clean shadows, animation still"
+    ),
+    StylePreset(
+        "manhwa",
+        "korean manhwa style, soft shading, glossy rendering, delicate linework, " +
+            "muted pastel palette, webtoon illustration"
+    ),
+    StylePreset(
+        "comic",
+        "american comic illustration, bold inking, strong hatching, dramatic contrast, " +
+            "graphic novel rendering"
+    ),
+    StylePreset(
+        "realistic",
+        "photorealistic render, natural skin texture, soft studio lighting, shallow depth of field, " +
+            "high detail"
+    ),
+    StylePreset(
+        "film",
+        "cinematic film still, 35mm, anamorphic flare, film grain, natural color grading, " +
+            "volumetric light"
+    ),
     StylePreset("watercolor", "soft watercolor illustration, muted palette, paper texture, gentle light"),
-    StylePreset("painting", "painterly illustration, rich brush strokes, dramatic light"),
-    StylePreset("cel", "cel shading, anime illustration, clean linework, flat colors"),
     StylePreset("ink", "Chinese ink wash painting, expressive ink, generous negative space"),
     StylePreset("pencil", "pencil sketch, graphite on paper, delicate linework, monochrome"),
     StylePreset("storybook", "vintage storybook illustration, warm muted colors, subtle grain")

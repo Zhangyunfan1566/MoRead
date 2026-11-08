@@ -146,16 +146,26 @@ fun ImageStudio(bookId: Long, entry: StudioEntry = StudioEntry(), onDismiss: () 
 
 @Composable
 internal fun styleName(id: String): String = stringResource(when (id) {
+    "", "none", "auto" -> R.string.image_style_auto
+    "anime" -> R.string.image_style_anime
     "watercolor" -> R.string.image_style_watercolor; "painting" -> R.string.image_style_painting
-    "cel" -> R.string.image_style_cel; "ink" -> R.string.image_style_ink; "pencil" -> R.string.image_style_pencil
+    "cel" -> R.string.image_style_cel; "manhwa" -> R.string.image_style_manhwa
+    "comic" -> R.string.image_style_comic; "realistic" -> R.string.image_style_realistic
+    "film" -> R.string.image_style_film
+    "ink" -> R.string.image_style_ink; "pencil" -> R.string.image_style_pencil
     "storybook" -> R.string.image_style_storybook; else -> R.string.image_style_custom
 })
 
 @Composable
 internal fun styleHint(id: String): String = stringResource(when (id) {
+    "", "none", "auto" -> R.string.image_style_auto_hint
+    "anime" -> R.string.image_style_anime_hint
+    "watercolor" -> R.string.image_style_watercolor_hint
     "painting" -> R.string.image_style_painting_hint; "cel" -> R.string.image_style_cel_hint
+    "manhwa" -> R.string.image_style_manhwa_hint; "comic" -> R.string.image_style_comic_hint
+    "realistic" -> R.string.image_style_realistic_hint; "film" -> R.string.image_style_film_hint
     "ink" -> R.string.image_style_ink_hint; "pencil" -> R.string.image_style_pencil_hint
-    "storybook" -> R.string.image_style_storybook_hint; else -> R.string.image_style_watercolor_hint
+    "storybook" -> R.string.image_style_storybook_hint; else -> R.string.image_style_custom
 })
 
 @Composable
@@ -560,9 +570,15 @@ internal fun CharacterAvatar(name: String, reference: String?, state: StudioStat
 
 @Composable
 internal fun StyleSample(id: String, modifier: Modifier) {
+    // 新增的 anime / manhwa / comic / realistic / film 还没有专属样张，
+    // 先借用画风最接近的那张，别让卡片空着。
     val image = when (id) {
         "painting" -> R.drawable.image_style_painting
         "cel" -> R.drawable.image_style_cel
+        "manhwa" -> R.drawable.image_style_cel
+        "comic" -> R.drawable.image_style_painting
+        "realistic" -> R.drawable.image_style_painting
+        "film" -> R.drawable.image_style_painting
         "ink" -> R.drawable.image_style_ink
         "pencil" -> R.drawable.image_style_pencil
         "storybook" -> R.drawable.image_style_storybook

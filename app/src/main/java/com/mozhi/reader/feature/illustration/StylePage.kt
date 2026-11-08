@@ -23,6 +23,7 @@ import com.mozhi.reader.ai.media.StyleSpec
 import com.mozhi.reader.core.database.entity.ImageStyleTemplateEntity
 import com.mozhi.reader.ui.components.*
 import com.mozhi.reader.ui.theme.MoReadSpacing
+import com.mozhi.reader.ui.theme.fieldContainerColor
 import com.mozhi.reader.ui.theme.moReadMetrics
 
 /**
@@ -33,12 +34,15 @@ import com.mozhi.reader.ui.theme.moReadMetrics
 internal fun LazyListScope.stylePage(state: StudioState, actions: StudioActions) {
     val draft = state.styleDraft
     item("presets-label") { StudioSectionLabel(stringResource(R.string.image_studio_presets)) }
-    items(IMAGE_STYLE_PRESETS.chunked(2), key = { "preset-${it.first().id}" }) { row ->
+    items(IMAGE_STYLE_PRESETS.chunked(2), key = { "preset-" + it.first().id.ifBlank { "auto" } }) { row ->
         GridRow {
             row.forEach { preset ->
                 val spec = StyleSpec(presetId = preset.id, natural = preset.natural, tags = preset.tags)
                 StyleCard(styleName(preset.id), styleHint(preset.id), selected = draft.isPreset(preset.id), inUse = state.style.isPreset(preset.id),
-                    onClick = { actions.style(spec) }, modifier = Modifier.weight(1f)) { StyleSample(preset.id, it) }
+                    onClick = { actions.style(spec) }, modifier = Modifier.weight(1f)) {
+                    // 「自动」不是一种画风，给它一张「不套壳」的示意，而不是随便借别家的样张。
+                    if (preset.id.isBlank()) AutoStyleSample(it) else StyleSample(preset.id, it)
+                }
             }
         }
     }
@@ -62,6 +66,24 @@ internal fun LazyListScope.stylePage(state: StudioState, actions: StudioActions)
 
 /** 自定义画风的 presetId 恒为 custom，所以预设卡只认 presetId；预设上追加的参考图不影响归属。 */
 private fun StyleSpec.isPreset(id: String): Boolean = presetId == id
+
+/** 「自动」卡的示意：中性排版表示"不预设画风，交给模型按正文决定"。 */
+@Composable
+private fun AutoStyleSample(modifier: Modifier) {
+    Box(modifier.background(fieldContainerColor()), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(MoReadSpacing.xs)
+        ) {
+            Icon(Icons.Outlined.AutoAwesome, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)
+            Text(
+                stringResource(R.string.image_style_auto),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
 
 @Composable
 private fun GridRow(content: @Composable RowScope.() -> Unit) =
