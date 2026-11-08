@@ -194,7 +194,8 @@ class ReaderToolset @Inject constructor(
                         personaId = personaId,
                         getBook = { libraryRepository.getBook(bookId) },
                         mediaService = mediaService,
-                        readingScope = readingScope
+                        readingScope = readingScope,
+                        allowed = { "generate_image" in (enabledTools ?: setOf("generate_image")) }
                     )
                 )
                 add(
@@ -206,7 +207,13 @@ class ReaderToolset @Inject constructor(
             }
         }
         return enabledTools?.let { allowed ->
-            tools.filter { tool -> tool.spec.name in READ_ONLY_BASE_TOOLS || tool.spec.name in allowed }
+            tools.filter { tool ->
+                // generate_image 即使被开关关掉也**保留在工具表里**（见 GenerateImageTool.allowed）：
+                // 摘掉它只会让模型回答"我没有生图能力"，用户根本不知道有个开关没开。
+                tool.spec.name in READ_ONLY_BASE_TOOLS ||
+                    tool.spec.name in allowed ||
+                    tool.spec.name == "generate_image"
+            }
         } ?: tools
     }
 }

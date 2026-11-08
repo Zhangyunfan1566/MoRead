@@ -111,7 +111,16 @@ internal class GenerateImageTool(
     private val personaId: Long,
     private val getBook: suspend () -> BookEntity?,
     private val mediaService: AiMediaGenerationService,
-    private val readingScope: ReadingScope
+    private val readingScope: ReadingScope,
+    /**
+     * 是否允许这次调用真的出图。
+     *
+     * **工具始终注册**，只是在关闭时执行会得到一条可操作的失败说明。
+     * 之前是把工具整个摘掉，结果模型只能回答「我没有生图能力」——
+     * 用户以为功能不存在，其实只是「设置 → 伴读 → 自主生图」没打开。
+     * 工具在、说明在，模型才能告诉用户去哪儿开。
+     */
+    private val allowed: suspend () -> Boolean = { true }
 ) : AgentTool {
     override val displayName: String = "生成并保存插图"
 
@@ -143,6 +152,13 @@ internal class GenerateImageTool(
     )
 
     override suspend fun execute(arguments: JsonObject): ToolResult {
+        if (!allowed()) {
+            return ToolResult.Failure(
+                "IMAGE_REPLIES_DISABLED",
+                "自主生图当前是关闭的，所以这次没有真的出图。请让用户到「设置 → 伴读 → 自主生图」打开开关后再试；" +
+                    "或者在正文里选中一段文字，用选段工具条上的「生成插图」按钮（那条路径不受这个开关限制）。"
+            )
+        }
         val prompt = arguments["prompt"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
         if (prompt.isEmpty()) return ToolResult.Failure("INVALID_ARGUMENT", "缺少生图提示词 prompt")
         val book = getBook() ?: return ToolResult.Failure("SOURCE_MISSING", "未找到当前书籍")
