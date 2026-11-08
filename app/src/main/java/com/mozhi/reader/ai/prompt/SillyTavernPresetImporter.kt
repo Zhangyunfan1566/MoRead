@@ -44,6 +44,9 @@ object SillyTavernPresetImporter {
      * 这是回落用的名单，不是权威判据（见类注释）。
      */
     private val MARKER_IDENTIFIERS = setOf(
+        // 注意 `main` 与 `enhanceDefinitions` 列在这里只是"旧预设里通常是占位"的提示，
+        // 真正判定还要叠加"内容为空"（见 import()）。它们的真实身份是**带内容的提示词**，
+        // 无条件按 marker 丢弃会把用户的主提示词整段吞掉。
         "main",
         "worldInfoBefore",
         "worldInfoAfter",
@@ -123,7 +126,11 @@ object SillyTavernPresetImporter {
             val name = entry.str("name").ifBlank { identifier.ifBlank { "条目 ${index + 1}" } }
             val content = entry.str("content")
             // 字段优先：显式 false 就是「要注入」，不再被 identifier 名单覆盖。
-            val isMarker = entry.bool("marker") ?: (identifier in MARKER_IDENTIFIERS)
+            // 名单只是**旧预设的回落**：酒馆里的 marker 条目本身就是空占位，
+            // 所以只有「在名单里 且 内容为空」才按 marker 处理。否则像 `main` 这种
+            // 名字在名单里、但内容是真正的系统提示词的条目会被整段丢弃（本预设就踩到）。
+            val isMarker = entry.bool("marker")
+                ?: (identifier in MARKER_IDENTIFIERS && content.isBlank())
             val order = orderEnabled[identifier]?.first ?: index
             val enabled = orderEnabled[identifier]?.second ?: entry.bool("enabled") ?: true
 

@@ -89,8 +89,18 @@ object TavernMacros {
         return if (expanded.contains(TRIM_MARKER)) expanded.replace(TRIM_MARKER, "").trim() else expanded
     }
 
+    /**
+     * 宏的整体形状。
+     *
+     * **收尾的 `}}` 必须逐字转义**：JVM 的 `java.util.regex` 把裸 `}` 当字面量，
+     * 但 Android 的 `java.util.regex` 是套在 ICU4C 上的，裸 `}` 直接报
+     * `Syntax error in regexp pattern near index N`（实测真机，N 正好落在这两个大括号上）。
+     * 单测跑在 JVM 上**永远抓不到**这类错，所以改成正则常量、由 `RegexPortabilityTest` 静态守门。
+     */
+    private val MACRO_PATTERN = Regex("\\{\\{([^{}]+)\\}\\}")
+
     /** 列出文本里引擎**不执行**的宏名（不改内容，只用于导入预览与排查）。 */
-    fun unknownMacros(text: String): List<String> = Regex("\\{\\{([^{}]+)}}")
+    fun unknownMacros(text: String): List<String> = MACRO_PATTERN
         .findAll(text)
         .map { match -> macroName(match.groupValues[1]) }
         .filter { it.isNotBlank() && it != COMMENT && it.lowercase() !in KNOWN }
@@ -100,7 +110,7 @@ object TavernMacros {
     /** 文本里引用了、但当前作用域里**没有值**的变量名（`{{getvar::x}}` 的 x）。 */
     fun unresolvedVariables(text: String, variables: TavernVariables?): List<String> {
         if (variables == null) return emptyList()
-        return Regex("\\{\\{getvar::([^{}]+)}}")
+        return Regex("\\{\\{getvar::([^{}]+)\\}\\}")
             .findAll(text)
             .map { it.groupValues[1].trim().substringBefore("::") }
             .filter { it.isNotBlank() && variables.get(it) == null }

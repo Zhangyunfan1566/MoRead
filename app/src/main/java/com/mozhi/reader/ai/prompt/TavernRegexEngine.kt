@@ -203,7 +203,9 @@ object TavernRegexEngine {
         // 必须用 **lambda 版** replace：字符串版 `replace(input, "$0")` 会把 $0 当成
         // 捕获组引用去展开，而这条正则没有捕获组 → 展开结果就是匹配到的 {{match}} 本身，
         // 等于什么都没替换。实测就是 CI 里那条「expected [a] but was [{{match}}]」。
-        val template = Regex("\\{\\{match}}", RegexOption.IGNORE_CASE)
+        // `}}` 必须转义：Android 的 Pattern 是 ICU4C 实现，裸 `}` 会抛
+        // "Syntax error in regexp pattern near index N"（JVM 上却合法，单测抓不到）。
+        val template = Regex("\\{\\{match\\}\\}", RegexOption.IGNORE_CASE)
             .replace(script.replacement) { "${'$'}0" }
         val out = StringBuilder(template.length + 16)
         var index = 0

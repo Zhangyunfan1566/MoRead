@@ -151,6 +151,23 @@ class SillyTavernPresetImporterTest {
     }
 
     @Test
+    fun `名单里的 identifier 只要带内容就必须注入，不能被当占位条目吞掉`() {
+        // 实测事故（2026-11-08 真机）：那份预设的 `main` 条目标识符在名单里、
+        // 没有 marker 字段、但内容是真系统提示词（228 字）。旧判定直接把它当 marker
+        // 丢掉 —— 用户的主提示词整段消失，而且界面只显示「已跳过」看不出少了什么。
+        val result = SillyTavernPresetImporter.import(
+            """{"name":"x","prompts":[
+              {"identifier":"main","name":"系统","role":"system","content":"你是助手，照实回答。","injection_position":0,"injection_depth":4},
+              {"identifier":"charDescription","name":"角色描述","role":"system","content":"描述正文","injection_position":0,"injection_depth":4}
+            ]}"""
+        )
+        assertEquals(listOf("系统", "角色描述"), result.presets.map { it.name })
+        assertTrue(result.markers.isEmpty())
+        assertEquals("你是助手，照实回答。", result.presets.first().prompt)
+        assertEquals(4, result.presets.first().depth)
+    }
+
+    @Test
     fun `缺 marker 字段时仍按 identifier 名单当占位条目`() {
         val result = SillyTavernPresetImporter.import(
             """{"name":"x","prompts":[
