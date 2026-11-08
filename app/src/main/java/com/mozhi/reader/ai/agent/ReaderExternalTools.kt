@@ -108,7 +108,8 @@ internal class WebSearchTool(
 
 internal class GenerateImageTool(
     private val bookId: Long,
-    private val personaId: Long,
+    /** 谁发起的（用于插图归属）；书库伴读没有当前角色，允许为空。 */
+    private val personaId: Long?,
     private val getBook: suspend () -> BookEntity?,
     private val mediaService: AiMediaGenerationService,
     private val readingScope: ReadingScope,

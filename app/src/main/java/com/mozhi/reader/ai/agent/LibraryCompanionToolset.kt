@@ -4,6 +4,7 @@ import com.mozhi.reader.ai.companion.LibraryBookScope
 import com.mozhi.reader.ai.companion.LibraryScopeGuard
 import com.mozhi.reader.ai.companion.LibraryConversationSources
 import com.mozhi.reader.ai.companion.LibraryOrganizationCoordinator
+import com.mozhi.reader.ai.media.AiMediaGenerationService
 import com.mozhi.reader.core.library.ShelfOrganizationRepository
 import com.mozhi.reader.core.retrieval.ReadingScope
 import com.mozhi.reader.core.library.AnnotationRepository
@@ -29,7 +30,8 @@ class LibraryCompanionToolset @Inject constructor(
     private val guard: LibraryScopeGuard,
     private val readerTools: ReaderToolset,
     private val shelf: ShelfOrganizationRepository,
-    private val organization: LibraryOrganizationCoordinator
+    private val organization: LibraryOrganizationCoordinator,
+    private val media: AiMediaGenerationService
 ) {
     suspend fun forConversation(sources: LibraryConversationSources, personaId: Long?): List<AgentTool> {
         val catalog = LibraryCatalogTool(library, shelf)
@@ -42,7 +44,35 @@ class LibraryCompanionToolset @Inject constructor(
             .filter { it.spec.name in names }
         // 并发的只读调用可能同时解析同一本书的工具；重复构造无害，但映射本身必须线程安全。
         val resolved = java.util.concurrent.ConcurrentHashMap<Pair<Long, String>, AgentTool>()
-        return listOf(catalog, organizer, CreateChartTool()) + templates.map { template ->
+        // 书库伴读也要能生图。用户在这个入口问「能生成插图吗」时，
+        // 以前工具表里根本没有 generate_image，模型只能如实回答「我这儿没有画笔」——
+        // 看起来像功能不存在，其实是这个入口压根没注册。
+        // 生图是**按书**的，所以同样走 ScopedLibraryTool 包一层（book_id 必填，范围沿用该书已读水位）。
+        val imageTemplate = GenerateImageTool(
+            bookId = sample.id,
+            personaId = personaId,
+            getBook = { library.getBook(sample.id) },
+            mediaService = media,
+            readingScope = ReadingScope.upto(0, 0),
+            allowed = { true }
+        )
+        val imageTool = ScopedLibraryTool(imageTemplate, emptyList(), guard::validate, resolve = sources::authorize) { scope, arguments ->
+            val tool = resolved.getOrPut(scope.bookId to imageTemplate.spec.name) {
+                GenerateImageTool(
+                    bookId = scope.bookId,
+                    personaId = personaId,
+                    getBook = { library.getBook(scope.bookId) },
+                    mediaService = media,
+                    readingScope = scope.readingScope,
+                    allowed = { true }
+                )
+            }
+            // 生图会写插图廊（改变书库状态），下一次同参调用不该命中缓存的工具实例……
+            // 但工具实例本身无状态，真正的写入发生在 mediaService 里；这里只保证
+            // 每次都用当前 scope 建的工具，不做额外缓存失效。
+            tool.execute(arguments)
+        }
+        return listOf(catalog, organizer, CreateChartTool(), imageTool) + templates.map { template ->
             ScopedLibraryTool(template, emptyList(), guard::validate, resolve = sources::authorize) { scope, arguments ->
                 val args = boundedLibraryArguments(template.spec.name, arguments, scope)
                 val tool = resolved.getOrPut(scope.bookId to template.spec.name) {
