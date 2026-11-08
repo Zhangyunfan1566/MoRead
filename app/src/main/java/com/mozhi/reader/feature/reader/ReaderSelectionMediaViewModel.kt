@@ -35,7 +35,9 @@ data class SelectionImageGeneration(
     val charOffset: Int?,
     val textAnchorJson: String,
     val sourceText: String,
-    val basePrompt: String
+    val basePrompt: String,
+    /** 选中段落**之前**的前情；重 roll 时保留，别丢。 */
+    val contextText: String = ""
 )
 
 sealed interface SelectionMediaEvent {
@@ -180,7 +182,6 @@ class ReaderSelectionMediaViewModel @Inject constructor(
                 append(" 第 ").append(chapterIndex + 1).append(" 章：").append(chapterTitle)
             }
             append("\n\n【选中段落】\n").append(selected)
-            if (nearby.isNotBlank()) append("\n\n【附近语境】\n").append(nearby)
         }
         generateImage(
             SelectionImageGeneration(
@@ -189,7 +190,10 @@ class ReaderSelectionMediaViewModel @Inject constructor(
                 charOffset = charOffset,
                 textAnchorJson = textAnchorJson,
                 sourceText = selection,
-                basePrompt = planningSource
+                basePrompt = planningSource,
+                // 前情单独走 contextText，不再拼进 targetText：
+                // 规划器要能区分「给谁配图」和「之前发生了什么」。
+                contextText = nearby
             ),
             prompt = planningSource,
             keepPreview = false
@@ -232,7 +236,8 @@ class ReaderSelectionMediaViewModel @Inject constructor(
                     sourceText = generation.sourceText,
                     prompt = prompt,
                     personaId = null,
-                    textAnchorJson = generation.textAnchorJson
+                    textAnchorJson = generation.textAnchorJson,
+                    contextText = generation.contextText
                 )
                 mutableState.value = mutableState.value.copy(
                     status = null,

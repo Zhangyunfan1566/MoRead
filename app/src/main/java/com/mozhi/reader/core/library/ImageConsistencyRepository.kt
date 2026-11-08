@@ -183,9 +183,14 @@ class ImageConsistencyRepository @Inject constructor(
      *   不是小说分镜，规划器的"只为正文配图、不得编造"规则对它是错配）。
      *   选区生图 / 对话生图 / 插图工坊 / 批量插图队列一律用默认值 false。
      */
+    /**
+     * @param contextText 选中段落**之前**的上下文（前情）。只用于让规划器知道"现在这个状态是怎么来的"，
+     *   不参与配图。以前这个方法没有这个参数，调用方只好把前情拼进 source，结果规划器无法区分
+     *   「要给谁配图」和「背景发生了什么」—— 实测会出现「前面刚被射精、这里画成穿着完整衣服」。
+     */
     suspend fun plan(bookId: Long, chapterIndex: Int?, source: String, castKeys: List<String>? = null,
         useReferences: Boolean = false, size: String? = null, styleOverride: StyleSpec? = null,
-        allowLegacyFallback: Boolean = false): ImageRecipe {
+        allowLegacyFallback: Boolean = false, contextText: String = ""): ImageRecipe {
         val book = bookContext(bookId, chapterIndex)
         val client = clients.imageGeneration()
         val caps = client.client.capabilities
@@ -211,7 +216,7 @@ class ImageConsistencyRepository @Inject constructor(
                     chapterTitle = runCatching { library.getChapter(bookId, book.chapterIndex)?.title }.getOrNull().orEmpty(),
                     chapterIndex = book.chapterIndex,
                     targetText = source.take(12_000),
-                    contextText = "",
+                    contextText = contextText.take(8_000),
                     people = book.people,
                     looks = book.looks.filter { it.sinceChapter <= book.chapterIndex },
                     style = style,
@@ -238,10 +243,37 @@ class ImageConsistencyRepository @Inject constructor(
                 runCatching { applyLibraryChange(bookId, book, change, book.chapterIndex) }
             }
             val limit = caps.maxCharacters.coerceAtLeast(1)
+            // **外貌档案自动补齐**：规划器在【角色固定外貌库】为空时只能现编外貌，
+            // 而它是否同时输出 changes 是不可靠的（协议要求了，模型不一定照做）。
+            // 一旦没建档，下一次生成又会重新编一套 —— 这就是"同一个角色每次长得都不一样"。
+            // 这里兜底：凡是本次出场但库里没有档案的角色，直接用规划器这一轮写好的角色块建档。
+            // 只取固定特征（外貌），把动作/表情/视线/临时状态过滤掉，避免把"撅起屁股"写进档案。
+            image.characters.take(limit).forEach { character ->
+                runCatching { ensureLookFromPlanner(bookId, book, character, book.chapterIndex) }
+            }
+            // 重新读一次：上面可能刚补了档案，cast 必须用补完之后的版本，
+            // 否则本次请求仍在用空档案（旧代码就是拿着 applyLibraryChange 之前的快照）。
+            val refreshed = if (planned.changes.isNotEmpty() || image.characters.isNotEmpty()) {
+                book.copy(looks = looks(bookId))
+            } else {
+                book
+            }
             val cast = image.characters
-                .map { character -> lookFor(book, character.name, book.chapterIndex) }
+                .map { character -> lookFor(refreshed, character.name, refreshed.chapterIndex) }
                 .take(limit)
-            val characterTags = image.characters.map { it.tag }.take(limit)
+            // 角色块里**强制带上档案外貌**：协议要求"照抄外貌库"，但模型经常漏写或改写，
+            // 漏一个发色就换一张脸。这里把档案里的固定特征补进去（已经写过的 tag 不重复加）。
+            val characterTags = image.characters.take(limit).mapIndexed { index, character ->
+                val look = cast.getOrNull(index)
+                val anchor = look?.tags?.split(',')?.map(String::trim)?.filter(String::isNotBlank).orEmpty()
+                if (anchor.isEmpty()) {
+                    character.tag
+                } else {
+                    val existing = character.tag.lowercase()
+                    val missing = anchor.filter { tag -> !existing.contains(tag.lowercase()) }
+                    (missing + character.tag).joinToString(", ")
+                }
+            }
             val refs = planReferences(caps, cast, style, useReferences)
             return ImageRecipe(
                 style = style,
@@ -320,6 +352,59 @@ class ImageConsistencyRepository @Inject constructor(
         return visibleLook(book.looks, key, chapterIndex)
             ?: person?.let { initialLook(it, chapterIndex) }
             ?: LookSpec(UUID.randomUUID().toString(), key, name, sinceChapter = chapterIndex, source = "architect")
+    }
+
+    /**
+     * 把规划器这一轮写好的角色块**拆成固定外貌与临时状态**，固定部分自动建档。
+     *
+     * 为什么需要：协议要求模型对未建档角色输出 `changes[{field:"new"}]`，但模型经常只写
+     * 角色块、不写 changes。没有档案 → 下次又现编 → 同一角色每次长相不同。
+     *
+     * 分类口径（只保留长期不变的东西进档案）：
+     * - 外貌类（hair / eyes / skin / body / face / bust / height / age 等）留下；
+     * - 动作、表情、视线、姿势、场景、互动、体液、破损衣物等**一律丢弃**——
+     *   "撅起屁股"、"流着精液" 这类必须只属于当前这一张图。
+     */
+    private suspend fun ensureLookFromPlanner(
+        bookId: Long,
+        book: ImageBookContext,
+        character: ImageSceneArchitect.Character,
+        chapterIndex: Int
+    ) {
+        val person = book.people.firstOrNull {
+            it.name == character.name || it.identity == character.name || character.name in it.aliases
+        }
+        val key = person?.identity ?: character.name
+        if (visibleLook(book.looks, key, chapterIndex) != null) return
+        val appearance = character.tag
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && isPermanentAppearance(it) }
+            .distinct()
+        if (appearance.isEmpty()) return
+        saveLook(
+            bookId,
+            LookSpec(
+                id = UUID.randomUUID().toString(),
+                characterKey = key,
+                name = character.name,
+                sinceChapter = chapterIndex,
+                natural = appearance.joinToString(", "),
+                tags = appearance.joinToString(", "),
+                source = "planner"
+            )
+        )
+    }
+
+    /** 永久的身体特征与固定着装；动作/表情/视线/姿势/场景/液体一律不算。 */
+    private fun isPermanentAppearance(tag: String): Boolean {
+        val lowered = tag.lowercase()
+        // 形如 "1girl" / "girl" / "boy" 的人数与性别 tag 不进档案（每张图单独判）。
+        if (lowered.matches(Regex("\\d*(girl|boy|girls|boys|multiple\\s+\\w+)"))) return false
+        if (TEMPORARY_TAGS.any { lowered.contains(it) }) return false
+        if (APPEARANCE_HINTS.any { lowered.contains(it) }) return true
+        // 明确不是动作/表情/场景的其它短 tag（面料、饰品、发型细节）也当作固定特征。
+        return lowered.split(' ').size <= 4 && lowered.all { it.isLetter() || it in " -_" }
     }
 
     /**
@@ -428,3 +513,41 @@ class ImageConsistencyRepository @Inject constructor(
 }
 
 fun randomImageSeed(): Long = kotlin.random.Random.nextLong(0, 0x100000000L)
+
+/**
+ * 动一下就变、**绝不能进外貌档案**的 tag。
+ *
+ * 这条清单是"同一角色每次长得都不一样"的另一半答案：如果连"撅起屁股""流着精液"
+ * 都被写进档案，档案本身就在污染下一张图。
+ */
+private val TEMPORARY_TAGS = listOf(
+    // 动作与姿势
+    "sitting", "standing", "kneeling", "lying", "leaning", "crouching", "bent over",
+    "on back", "on stomach", "on side", "all fours", "spread legs", "legs up", "arms up", "arms behind",
+    "hand up", "hands on", "holding", "touching", "spread", "arched", "crossed legs",
+    "spread pussy", "presenting", "top-down bottom-up", "ass visible", "spread ass",
+    // 表情与视线
+    "smile", "grin", "laugh", "blush", "embarrassed", "frown", "pout", "surprised", "crying", "tears",
+    "angry", "serious", "sad", "worried", "scared", "smug", "seductive", "expressionless",
+    "half-closed eyes", "open mouth", "closed eyes", "looking at", "looking away", "looking down",
+    "looking up", "looking back", "ahegao", "rolling eyes", "tongue out",
+    // 场景、构图与镜头
+    "close-up", "upper body", "lower body", "medium shot", "full body", "wide shot", "cowboy shot",
+    "from side", "from above", "from below", "from behind", "pov", "indoors", "outdoors",
+    "bedroom", "classroom", "library", "rain", "snow", "sunset", "night", "day",
+    // 临时状态与体液
+    "cum", "semen", "precum", "sweat", "wet", "drenched", "torn", "ripped", "undressed",
+    "nude", "naked", "topless", "bottomless", "clothes off", "partially undressed",
+    "after sex", "sex", "penetration", "creampie", "fucked", "spread pussy",
+    // 情绪与光效
+    "glowing", "sparkle", "blurry", "motion lines", "depth of field", "bokeh"
+)
+
+/** 明确属于「长期不变」的外貌特征；命中就留下。 */
+private val APPEARANCE_HINTS = listOf(
+    "hair", "eyes", "eye color", "skin", "skin tone", "complexion", "body", "build", "figure",
+    "bust", "breast size", "hips", "waist", "height", "tall", "short", "slim", "curvy", "plump",
+    "muscular", "freckles", "mole", "scar", "tattoo", "piercing", "earring", "glasses",
+    "long hair", "short hair", "ponytail", "twin tails", "braid", "bun", "bangs", "ahoge",
+    "blunt bangs", "side ponytail", "hair ornament", "hairband", "ribbon"
+)

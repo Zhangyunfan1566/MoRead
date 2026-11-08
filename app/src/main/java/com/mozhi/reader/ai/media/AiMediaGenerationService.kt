@@ -102,8 +102,10 @@ class AiMediaGenerationService @Inject constructor(
         personaId: Long?,
         textAnchorJson: String = "",
         persist: Boolean = true,
-        beforePaidRequest: suspend () -> Boolean = { true },
-        recipe: ImageRecipe? = null
+        beforePaidRequest: suspend () => Boolean = { true },
+        recipe: ImageRecipe? = null,
+        /** 选中段落之前的上下文。只用于让规划器理解「当前状态是怎么来的」，不参与配图。 */
+        contextText: String = ""
     ): IllustrationEntity {
         val cleanPrompt = prompt.trim().take(MAX_PROMPT_CHARS)
         require(cleanPrompt.isNotEmpty()) { "生图提示词不能为空" }
@@ -113,7 +115,9 @@ class AiMediaGenerationService @Inject constructor(
         // 以前两段都会冒出一句同样的「服务返回错误（HTTP 500）」，用户根本不知道该改
         // 「生图提示词」那个对话模型，还是该改「生图 API」那个 key / 地址。
         val actualRecipe = recipe ?: try {
-            imageConsistency.plan(bookId, chapterIndex, cleanPrompt)
+            // contextText 只有「选段出图」这条路径给得出（选段工具条会附带前后文）；
+            // 工具/队列路径没有前情，退回只给正文。
+            imageConsistency.plan(bookId, chapterIndex, cleanPrompt, contextText = contextText)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {

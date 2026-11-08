@@ -188,7 +188,10 @@ internal class GenerateImageTool(
             charOffset = charOffset,
             sourceText = arguments["source_text"]?.jsonPrimitive?.contentOrNull.orEmpty(),
             prompt = prompt,
-            personaId = personaId
+            personaId = personaId,
+            // 工具路径没有"选中段落"这个概念，模型自己写的 prompt 已经是它对画面的理解；
+            // 但若它把前情写进了 source_text，那部分只当背景，不当配图目标。
+            contextText = arguments["source_text"]?.jsonPrimitive?.contentOrNull.orEmpty()
         )
         return ToolResult.Success(AgentMediaResult(
             mediaKind = "image",
