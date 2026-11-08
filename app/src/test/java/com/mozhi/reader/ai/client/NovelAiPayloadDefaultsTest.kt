@@ -114,7 +114,7 @@ class NovelAiPayloadDefaultsTest {
         }
         val result = client("nai-diffusion-4-5-full", http).generateImages("1girl").single()
         assertEquals(2, calls)
-        assertTrue(result.bytes.isNotEmpty())
+        assertTrue((result.bytes?.size ?: 0) > 0)
     }
 
     @Test
@@ -127,8 +127,9 @@ class NovelAiPayloadDefaultsTest {
         val error = runCatching { client("nai-diffusion-4-5-full", http).generateImages("1girl") }.exceptionOrNull()
         // 4xx 是请求本身有问题，重试纯属浪费钱 —— 只打一次。
         assertEquals(1, calls)
+        requireNotNull(error) { "400 应该抛出异常" }
         assertTrue(error is AiClientException)
-        assertTrue(error!!.message!!.contains("400"))
+        assertTrue(error.message.orEmpty().contains("400"))
     }
 
     @Test
@@ -141,7 +142,8 @@ class NovelAiPayloadDefaultsTest {
         val error = runCatching { client("nai-diffusion-4-5-full", http).generateImages("1girl") }.exceptionOrNull()
         assertEquals(2, calls)
         // 最后一次的响应体必须原样带回，否则用户只看到"重试后仍然失败"，没有任何诊断信息。
-        assertTrue(error!!.message!!.contains("Internal Server Error"))
+        requireNotNull(error) { "持久 500 应该抛出异常" }
+        assertTrue(error.message.orEmpty().contains("Internal Server Error"))
     }
 
     // ---------- 脚手架 ----------
