@@ -72,8 +72,13 @@ class LibraryCompanionToolsetTest {
             })
         }
         val sources = LibraryConversationSources(7, "u", emptyList(), guard, chats)
-        val tools = LibraryCompanionToolset(library, mockk(), mockk(), guard, reader, mockk(), mockk()).forConversation(sources, null)
-        assertEquals(setOf("find_books", "propose_library_organization", "create_chart", "read_book_section"), tools.map { it.spec.name }.toSet())
+        val tools = LibraryCompanionToolset(library, mockk(), mockk(), guard, reader, mockk(), mockk(), mockk()).forConversation(sources, null)
+        // generate_image 现在也注册在书库伴读里（用户在这个入口问"能生成插图吗"时，
+        // 以前工具表里没有它，模型只能回答"我这儿没有画笔"）。
+        assertEquals(
+            setOf("find_books", "propose_library_organization", "create_chart", "generate_image", "read_book_section"),
+            tools.map { it.spec.name }.toSet()
+        )
         val read = tools.single { it.spec.name == "read_book_section" }
         assertNull(read.spec.parameters["properties"]!!.jsonObject["book_id"]!!.jsonObject["enum"])
         read.execute(buildJsonObject { put("book_id", 2); put("from_chapter", 1) }).content
