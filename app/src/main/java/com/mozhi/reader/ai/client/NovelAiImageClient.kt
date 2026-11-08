@@ -217,7 +217,12 @@ class NovelAiImageClient(
                         mapOf(
                             "base_caption" to JsonPrimitive(effectivePrompt),
                             "char_captions" to JsonArray(request.characterPrompts.map { character ->
-                                JsonObject(mapOf("char_caption" to JsonPrimitive(character), "centers" to JsonArray(emptyList())))
+                                JsonObject(
+                                    mapOf(
+                                        "char_caption" to JsonPrimitive(character),
+                                        "centers" to DEFAULT_CENTERS
+                                    )
+                                )
                             })
                         )
                     ),
@@ -239,7 +244,7 @@ class NovelAiImageClient(
                                     JsonObject(
                                         mapOf(
                                             "char_caption" to JsonPrimitive(""),
-                                            "centers" to JsonArray(emptyList())
+                                            "centers" to DEFAULT_CENTERS
                                         )
                                     )
                                 }
@@ -291,6 +296,32 @@ class NovelAiImageClient(
         const val DEFAULT_NEGATIVE_PROMPT =
             "lowres, jpeg artifacts, worst quality, bad quality, watermark, blurry, very displeasing"
         private const val MAX_ARCHIVE_BYTES = 30 * 1024 * 1024
+        /**
+         * 角色位置。**不能发空数组**。
+         *
+         * 实测（2026-11-08，官方 image.novelai.net，同一个 key 同一个模型）：
+         * - `char_captions[].centers = []`            → **HTTP 500**
+         *   `{"statusCode":500,"message":"Internal Server Error"}`
+         * - `char_captions[].centers = [{x:.5,y:.5}]` → 200，正常出图
+         *
+         * 只要 `char_captions` 非空（即正向带了角色），每个条目的 centers 就必须至少一个点，
+         * 正向负向都一样。空数组会被服务端当成非法坐标直接 500 —— 而且返回的是裸 500，
+         * 没有任何说明，看起来像服务挂了。
+         *
+         * 这里用画布中心。`use_coords=false` 时官方会自己按顺序排布，坐标只是个占位，
+         * 所以统一给中心点即可（与 plana 的 AUTO 分支一致：position 为空时返回 {0.5, 0.5}）。
+         */
+        private val DEFAULT_CENTERS: JsonArray = JsonArray(
+            listOf(
+                JsonObject(
+                    mapOf(
+                        "x" to JsonPrimitive(0.5),
+                        "y" to JsonPrimitive(0.5)
+                    )
+                )
+            )
+        )
+
         /** 总共试几次（含首次）。 */
         private const val RETRY_ATTEMPTS = 2
         /** 第 n 次重试前等 n × 这个值。 */

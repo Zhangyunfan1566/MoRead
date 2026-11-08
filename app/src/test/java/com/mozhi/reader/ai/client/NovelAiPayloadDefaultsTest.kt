@@ -102,6 +102,29 @@ class NovelAiPayloadDefaultsTest {
         assertEquals(0, negative.size)
     }
 
+    @Test
+    fun everyCharCaptionCarriesANonEmptyCenter() {
+        // **这是 500 的真正原因**（2026-11-08 用官方 API 逐条实测过）：
+        //   centers = []              → HTTP 500 {"statusCode":500,"message":"Internal Server Error"}
+        //   centers = [{x:.5,y:.5}]   → 200，正常出图
+        // 只要 char_captions 非空，每个条目的 centers 就至少要有一个点；正向负向都一样。
+        val request = ImageRequest(prompt = "1girl, 1boy", characterPrompts = listOf("silver hair", "black hair"))
+        val parameters = client("nai-diffusion-5-full-medium").buildPayload(request, "832x1216").obj("parameters")
+
+        val positive = parameters.getValue("v4_prompt").jsonObject
+            .getValue("caption").jsonObject.getValue("char_captions").jsonArray
+        val negative = parameters.getValue("v4_negative_prompt").jsonObject
+            .getValue("caption").jsonObject.getValue("char_captions").jsonArray
+
+        (positive + negative).forEachIndexed { index, element ->
+            val centers = element.jsonObject.getValue("centers").jsonArray
+            assertTrue("第 $index 条 char_captions 的 centers 不能为空", centers.isNotEmpty())
+            val point = centers[0].jsonObject
+            assertTrue(point.getValue("x").jsonPrimitive.content.isNotBlank())
+            assertTrue(point.getValue("y").jsonPrimitive.content.isNotBlank())
+        }
+    }
+
     // ---------- 重试 ----------
 
     @Test
