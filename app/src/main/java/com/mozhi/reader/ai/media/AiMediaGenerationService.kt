@@ -13,6 +13,7 @@ import java.io.File
 import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -108,14 +109,38 @@ class AiMediaGenerationService @Inject constructor(
         require(cleanPrompt.isNotEmpty()) { "生图提示词不能为空" }
         check(beforePaidRequest()) { "生成条件已改变" }
         val resolved = clientFactory.imageGeneration()
-        val actualRecipe = recipe ?: imageConsistency.plan(bookId, chapterIndex, cleanPrompt)
+        // 下面把「规划」与「出图」两段分开包，失败时能说清是哪一段出的问题。
+        // 以前两段都会冒出一句同样的「服务返回错误（HTTP 500）」，用户根本不知道该改
+        // 「生图提示词」那个对话模型，还是该改「生图 API」那个 key / 地址。
+        val actualRecipe = recipe ?: try {
+            imageConsistency.plan(bookId, chapterIndex, cleanPrompt)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            // plan() 内部已经用 plannerFailure() 给出过可操作的中文话术（"画面规划失败：…"），
+            // 那种情况原样抛出即可，再包一层只会得到「阶段失败：规划失败：…」这种双前缀。
+            if (error is IllegalStateException && !error.message.isNullOrBlank()) throw error
+            throw IllegalStateException(
+                "画面规划阶段失败（还没开始向生图服务付费）：${error.message ?: error.javaClass.simpleName}",
+                error
+            )
+        }
         imageConsistency.validateRecipe(bookId, actualRecipe, chapterIndex)
         require(actualRecipe.backend.isBlank() || actualRecipe.backend == resolved.label) { "生图服务已更换，请重新调整配方" }
         check(beforePaidRequest()) { "生成条件已改变" }
         val request = imageConsistency.request(actualRecipe, resolved.client)
         val generatedPrompt = request.prompt
         check(beforePaidRequest()) { "生成条件已改变" }
-        val generated = resolved.client.generateImages(request).first()
+        val generated = try {
+            resolved.client.generateImages(request).first()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            throw IllegalStateException(
+                "生图阶段失败（请求已发往 ${resolved.label}）：${error.message ?: error.javaClass.simpleName}",
+                error
+            )
+        }
         val bytes = resolved.client.materializeImage(generated)
         require(bytes.size <= MAX_MEDIA_BYTES) { "生成图片超过 30 MB，已取消保存" }
         return withContext(Dispatchers.IO) {

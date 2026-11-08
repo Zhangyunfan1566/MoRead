@@ -16,6 +16,7 @@ import com.mozhi.reader.ai.media.ImageCapabilities
 import com.mozhi.reader.ai.media.ReferenceKind
 import java.util.Base64
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 
 /**
@@ -78,7 +79,7 @@ class NovelAiImageClient(
             .build()
         val zipBytes = withContext(Dispatchers.IO) {
             val response = try {
-                httpClient.newCall(request).execute()
+                executeWithRetry(request)
             } catch (error: Throwable) {
                 throw mapTransportError(error)
             }
@@ -107,6 +108,39 @@ class NovelAiImageClient(
         return GeneratedImage(bytes = image, url = null, mediaType = "image/png")
     }
 
+    /**
+     * 5xx 与队列满重试一次。
+     *
+     * NAI（以及套在它前面的中转站）在排队拥塞时会回 500 / 503 或带
+     * `{"statusCode":500,"message":"Internal Server Error"}` 的裸 500。
+     * 这类失败**重试大概率就好了**，但一次性放弃会让用户白等几十秒拿到一个红条。
+     * 只重试一次、只重试 5xx 与 429：4xx 是请求本身有问题，重试是浪费钱。
+     */
+    private suspend fun executeWithRetry(request: Request): okhttp3.Response {
+        repeat(RETRY_ATTEMPTS) { attempt ->
+            val last = attempt == RETRY_ATTEMPTS - 1
+            val response = try {
+                httpClient.newCall(request).execute()
+            } catch (error: Throwable) {
+                // 网络层错误（连接被重置、超时）同样值得再试一次；最后一次原样抛出，
+                // 交给 mapTransportError 翻译成用户能看懂的文案。
+                if (last) throw error
+                // 用 delay 而不是 Thread.sleep：它可被取消，用户点「停止」能立刻退出。
+                delay(RETRY_DELAY_MS * (attempt + 1))
+                return@repeat
+            }
+            // 最后一次不重试：**把响应原样交回去**，调用方才能从 body 里读到
+            // 真实错误（丢掉 body 只剩一句"重试后仍然失败"，等于把诊断信息扔了）。
+            if (last || !isRetryable(response.code)) return response
+            // 重试前必须关闭，否则连接不会归还连接池。
+            runCatching { response.close() }
+            delay(RETRY_DELAY_MS * (attempt + 1))
+        }
+        error("unreachable: repeat 的最后一次一定已经 return 或 throw")
+    }
+
+    private fun isRetryable(code: Int): Boolean = code == 429 || code in 500..599
+
     override suspend fun materializeImage(image: GeneratedImage): ByteArray =
         image.bytes?.takeIf(ByteArray::isNotEmpty) ?: throw AiClientException.Empty()
 
@@ -120,6 +154,7 @@ class NovelAiImageClient(
         val effectivePrompt = mergePositivePrompt(positivePrompt, request.prompt)
         val negative = mergePositivePrompt(negativePrompt.trim().ifBlank { DEFAULT_NEGATIVE_PROMPT }, request.negative)
         val isV4 = capabilities.perCharacterPrompt
+        val isV5 = model.startsWith("nai-diffusion-5")
         require(request.characterPrompts.size <= capabilities.maxCharacters) { "当前 NovelAI 模型的出场人物数量已达上限" }
         val parameters = linkedMapOf<String, JsonElement>(
             "width" to JsonPrimitive(width),
@@ -130,8 +165,28 @@ class NovelAiImageClient(
             "n_samples" to JsonPrimitive(1),
             "ucPreset" to JsonPrimitive(ucPreset.coerceIn(0, 3)),
             "qualityToggle" to JsonPrimitive(qualityToggle),
-            "negative_prompt" to JsonPrimitive(negative)
+            "negative_prompt" to JsonPrimitive(negative),
+            // 下面这一批是官方 web 端**每次都会带**的默认值。少发时，官方服务能靠默认值蒙混过去，
+            // 但中转站/自建代理往往按"字段齐全"做校验，缺字段就直接 500。
+            // 实测事故（2026-11-08）：选段出图转圈后返回
+            // {"statusCode":500,"message":"Internal Server Error"}，就是中转站这一类。
+            "dynamic_thresholding" to JsonPrimitive(false),
+            "controlnet_strength" to JsonPrimitive(1),
+            "legacy" to JsonPrimitive(false),
+            "add_original_image" to JsonPrimitive(true),
+            "noise_schedule" to JsonPrimitive(if (isV5) "karras" else "native"),
+            "legacy_v3_extend" to JsonPrimitive(false),
+            "legacy_uc" to JsonPrimitive(false),
+            "autoSmea" to JsonPrimitive(false),
+            "prefer_brownian" to JsonPrimitive(true),
+            "deliberate_euler_ancestral_bug" to JsonPrimitive(false),
+            "inpaintImg2ImgStrength" to JsonPrimitive(1),
+            "normalize_reference_strength_multiple" to JsonPrimitive(false),
+            "image_format" to JsonPrimitive("png"),
+            "stream" to JsonPrimitive("msgpack")
         )
+        // 只有非 V5 才发 cfg_rescale：官方能力表里 V5 没有这个字段，带上会被请求清洗删掉。
+        if (!isV5) parameters["cfg_rescale"] = JsonPrimitive(0)
         request.seed?.let { parameters["seed"] = JsonPrimitive(it and 0xffffffffL) }
         val characterRefs = request.references.filter { it.spec.kind == ReferenceKind.CHARACTER }
         val styleRefs = request.references.filter { it.spec.kind == ReferenceKind.STYLE }
@@ -153,7 +208,9 @@ class NovelAiImageClient(
             parameters["reference_strength_multiple"] = JsonArray(styleRefs.map { JsonPrimitive(it.spec.strength.coerceIn(0f, 1f)) })
         }
         if (isV4) {
-            parameters["params_version"] = JsonPrimitive(3)
+            // V5 用 params_version=4，V4 / V4.5 用 3 —— 官方 web 端就是这么分的，
+            // 恒发 3 会让 V5 模型被当成旧协议解析（实测 500 的另一个可能来源）。
+            parameters["params_version"] = JsonPrimitive(if (isV5) 4 else 3)
             parameters["v4_prompt"] = JsonObject(
                 mapOf(
                     "caption" to JsonObject(
@@ -168,14 +225,28 @@ class NovelAiImageClient(
                     "use_order" to JsonPrimitive(true)
                 )
             )
+            // **正负 char_captions 必须等长**。官方会在长度不一致时直接拒绝：
+            // 「V4 positive and negative character prompts must have the same length.」
+            // 原来这里恒写空数组，只要正向带了角色就一定会被判不等长。
+            // 按正向的角色数展开，没写负向的发空串（与官方 web 端一致）。
             parameters["v4_negative_prompt"] = JsonObject(
                 mapOf(
                     "caption" to JsonObject(
                         mapOf(
                             "base_caption" to JsonPrimitive(negative),
-                            "char_captions" to JsonArray(emptyList())
+                            "char_captions" to JsonArray(
+                                request.characterPrompts.map {
+                                    JsonObject(
+                                        mapOf(
+                                            "char_caption" to JsonPrimitive(""),
+                                            "centers" to JsonArray(emptyList())
+                                        )
+                                    )
+                                }
+                            )
                         )
-                    )
+                    ),
+                    "legacy_uc" to JsonPrimitive(false)
                 )
             )
         }
@@ -220,6 +291,10 @@ class NovelAiImageClient(
         const val DEFAULT_NEGATIVE_PROMPT =
             "lowres, jpeg artifacts, worst quality, bad quality, watermark, blurry, very displeasing"
         private const val MAX_ARCHIVE_BYTES = 30 * 1024 * 1024
+        /** 总共试几次（含首次）。 */
+        private const val RETRY_ATTEMPTS = 2
+        /** 第 n 次重试前等 n × 这个值。 */
+        private const val RETRY_DELAY_MS = 1_500L
 
         internal fun mergePositivePrompt(fixed: String, dynamic: String): String =
             listOf(fixed, dynamic)
